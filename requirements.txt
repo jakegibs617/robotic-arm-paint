@@ -1,0 +1,15 @@
+# Core dependencies for the painterbot MVP (flat 2D drawing).
+pyserial>=3.5
+numpy>=1.26
+opencv-python>=4.9
+svgpathtools>=1.6
+pydantic>=2.6
+pyyaml>=6.0
+matplotlib>=3.8
+pytest>=8.0
+
+# Optional, enabled in later phases (Phase 8+: iPhone LiDAR scan import / 3D painting).
+# Install with: pip install -e ".[scan]"
+# open3d>=0.18
+# trimesh>=4.1
+# scipy>=1.12

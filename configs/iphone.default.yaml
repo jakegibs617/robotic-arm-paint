@@ -1,0 +1,15 @@
+# iPhone camera / LiDAR configuration (Phase 7-8).
+#
+# Not used by the MVP flat-drawing pipeline. Kept here so the calibration and
+# scan-import apps have a stable config to read once those phases begin.
+
+camera:
+  # Overhead photo used for four-corner manual workspace calibration.
+  # Corners are clicked in this order: BL, BR, TR, TL.
+  corner_click_order: [bottom_left, bottom_right, top_right, top_left]
+
+lidar:
+  # Preferred export formats from third-party scan apps (Polycam, Scaniverse).
+  accepted_formats: [obj, glb, usdz, stl, ply]
+  # Units in the exported mesh; scans are usually in meters.
+  mesh_units: meters
