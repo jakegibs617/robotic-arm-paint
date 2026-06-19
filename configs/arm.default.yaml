@@ -1,0 +1,67 @@
+# Default 6DOF arm configuration.
+#
+# Joint order is fixed and matches the controller's servo channels:
+#   0: base        (rotation around vertical axis)
+#   1: shoulder
+#   2: elbow
+#   3: wrist_pitch
+#   4: wrist_roll
+#   5: gripper      (used as marker clamp / unused)
+#
+# IMPORTANT: min/max are SAFE software limits in servo degrees. Commands outside
+# these ranges are rejected. Tighten them during Phase 1 hardware bring-up
+# (record real safe angles per joint before drawing).
+
+serial:
+  baud: 115200
+  # Default port is null; pass --port on the CLI or set it here once known,
+  # e.g. /dev/tty.usbserial-1420
+  port: null
+  timeout_s: 1.0
+  # Protocol the controller speaks. "mock" runs fully in software.
+  # Real options will be added during bring-up (e.g. "arduino_lx16a").
+  protocol: mock
+
+motion:
+  # Degrees per step when interpolating a move; lower = smoother + slower.
+  max_step_deg: 2.0
+  # Delay between interpolation steps (seconds). Start slow for safety.
+  step_delay_s: 0.02
+
+joints:
+  - name: base
+    channel: 0
+    min_deg: 0
+    max_deg: 180
+    home_deg: 90
+    invert: false
+  - name: shoulder
+    channel: 1
+    min_deg: 20
+    max_deg: 160
+    home_deg: 90
+    invert: false
+  - name: elbow
+    channel: 2
+    min_deg: 20
+    max_deg: 160
+    home_deg: 90
+    invert: false
+  - name: wrist_pitch
+    channel: 3
+    min_deg: 0
+    max_deg: 180
+    home_deg: 90
+    invert: false
+  - name: wrist_roll
+    channel: 4
+    min_deg: 0
+    max_deg: 180
+    home_deg: 90
+    invert: false
+  - name: gripper
+    channel: 5
+    min_deg: 10
+    max_deg: 150
+    home_deg: 30
+    invert: false

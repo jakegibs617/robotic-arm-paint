@@ -1,0 +1,36 @@
+# Workspace / drawing-surface configuration.
+#
+# For the MVP we use MANUAL pose calibration instead of inverse kinematics:
+# the user jogs the arm to a few reference poses and saves them. Drawing
+# coordinates (mm on paper) are mapped onto servo poses by interpolating
+# between these reference poses (see drawing/stroke_planner.py).
+#
+# The pen_up / pen_down poses define the marker height; the corner poses
+# define the flat drawing plane. Capture all of these with the jog CLI
+# (`save pen_up`, `save corner_bl`, etc.) before drawing.
+
+# Physical drawing area on the paper, in millimeters.
+paper:
+  width_mm: 150.0
+  height_mm: 150.0
+  # Margin kept clear at the edges of the drawing area.
+  margin_mm: 10.0
+
+# Named poses are stored here once captured during calibration.
+# Each pose is a list of 6 servo angles in degrees (joint order from arm config).
+poses:
+  home: null
+  pen_up: null
+  pen_down: null
+  # Four corners of the drawing plane, captured at pen_down height.
+  corner_bl: null   # bottom-left  (paper origin, x=0 y=0)
+  corner_br: null   # bottom-right (x=width y=0)
+  corner_tl: null   # top-left     (x=0 y=height)
+  corner_tr: null   # top-right    (x=width y=height)
+
+# Drawing speed / sampling.
+drawing:
+  # Max distance between sampled points along a path, in mm.
+  point_spacing_mm: 1.5
+  # Settle time after lowering/raising the pen, in seconds.
+  pen_settle_s: 0.3

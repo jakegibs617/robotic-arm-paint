@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "painterbot"
+version = "0.1.0"
+description = "Mac-first software to control a low-cost 6DOF servo robot arm to draw on paper."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Jake Giberson" }]
+dependencies = [
+    "pyserial>=3.5",
+    "numpy>=1.26",
+    "opencv-python>=4.9",
+    "svgpathtools>=1.6",
+    "pydantic>=2.6",
+    "pyyaml>=6.0",
+    "matplotlib>=3.8",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+# Enabled in later phases (iPhone LiDAR scan import, 3D painting).
+scan = ["open3d>=0.18", "trimesh>=4.1", "scipy>=1.12"]
+
+[project.scripts]
+painterbot-jog = "painterbot.apps.manual_jog:main"
+painterbot-draw-shape = "painterbot.apps.draw_shape:main"
+painterbot-draw-svg = "painterbot.apps.draw_svg:main"
+painterbot-calibrate = "painterbot.apps.calibrate_workspace:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

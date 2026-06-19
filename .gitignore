@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# Tooling
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Project outputs
+out/
+*.log
+
+# Calibrated configs are environment-specific
+configs/workspace.calibrated.yaml
+
+# OS
+.DS_Store
