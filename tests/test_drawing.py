@@ -40,6 +40,16 @@ def test_fit_to_paper_stays_within_margins():
     assert max_y <= 90 + 1e-6
 
 
+def test_fit_degenerate_axis_no_nan():
+    # A perfectly vertical line has zero width; fitting must not produce NaN.
+    paper = PaperConfig(width_mm=100, height_mm=100, margin_mm=10)
+    vertical = [[(5, 0), (5, 10)]]
+    for preserve in (True, False):
+        fitted = fit_to_paper(vertical, paper, preserve_aspect=preserve)
+        for x, y in fitted[0]:
+            assert math.isfinite(x) and math.isfinite(y)
+
+
 def test_fit_preserves_aspect_ratio():
     paper = PaperConfig(width_mm=200, height_mm=100, margin_mm=0)
     # A unit square should remain square (equal width/height) after fitting.

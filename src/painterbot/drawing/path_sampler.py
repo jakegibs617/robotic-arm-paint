@@ -77,12 +77,17 @@ def fit_to_paper(
     if src_w == 0 and src_h == 0:
         return [list(s) for s in drawing]
 
-    sx = usable_w / src_w if src_w > 0 else float("inf")
-    sy = usable_h / src_h if src_h > 0 else float("inf")
+    # A degenerate axis (zero span, e.g. a perfectly vertical line) has no
+    # meaningful scale of its own; leave it None and borrow the other axis's
+    # scale so we never multiply 0 by infinity (which yields NaN).
+    sx = usable_w / src_w if src_w > 0 else None
+    sy = usable_h / src_h if src_h > 0 else None
     if preserve_aspect:
-        scale = min(sx, sy)
-        scale = scale if math.isfinite(scale) else 1.0
-        sx = sy = scale
+        finite = [s for s in (sx, sy) if s is not None]
+        sx = sy = min(finite) if finite else 1.0
+    else:
+        sx = sx if sx is not None else (sy if sy is not None else 1.0)
+        sy = sy if sy is not None else (sx if sx is not None else 1.0)
 
     out_w = src_w * sx
     out_h = src_h * sy

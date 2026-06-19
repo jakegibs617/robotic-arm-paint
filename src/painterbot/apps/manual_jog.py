@@ -58,7 +58,8 @@ def _resolve_joint(arm: Arm, token: str) -> str:
     return token
 
 
-def run_repl(arm: Arm, ws_cfg, args) -> None:
+def run_repl(arm: Arm, ws_cfg, args) -> Arm:
+    """Run the interactive loop. Returns the live arm (may differ after `connect`)."""
     print("painterbot manual jog. Type 'help' for commands, 'quit' to exit.")
     print(f"connected (mock={arm.backend.is_mock}); pose = {_fmt(arm.pose)}")
 
@@ -121,6 +122,8 @@ def run_repl(arm: Arm, ws_cfg, args) -> None:
         except (IndexError, ValueError, KeyError, RuntimeError) as exc:
             print(f"error: {exc}")
 
+    return arm
+
 
 def _fmt(pose) -> str:
     return "[" + ", ".join(f"{a:.1f}" for a in pose) + "]"
@@ -143,7 +146,8 @@ def main(argv=None) -> int:
     arm_cfg, ws_cfg = load_configs(args)
     arm = connect(args, arm_cfg)
     try:
-        run_repl(arm, ws_cfg, args)
+        # run_repl may reconnect (the `connect` command), so close what it returns.
+        arm = run_repl(arm, ws_cfg, args)
     finally:
         arm.close()
     return 0
