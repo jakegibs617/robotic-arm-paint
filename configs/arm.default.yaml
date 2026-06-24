@@ -19,7 +19,8 @@ serial:
   port: null
   timeout_s: 1.0
   # Protocol the controller speaks. "mock" runs fully in software.
-  # Real options will be added during bring-up (e.g. "arduino_lx16a").
+  # Real wire encoders: "ascii_servo" (placeholder), "lx16a" (LX-16A bus servo).
+  # Register board-specific framing with register_protocol() during bring-up.
   protocol: mock
 
 motion:
