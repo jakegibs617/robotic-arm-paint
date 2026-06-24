@@ -25,6 +25,52 @@ from painterbot.drawing.path_sampler import Drawing, Point, resample_stroke
 logger = logging.getLogger("painterbot.planner")
 
 _CORNERS = ("corner_bl", "corner_br", "corner_tl", "corner_tr")
+_REQUIRED_POSES = (*_CORNERS, "pen_up", "pen_down", "home")
+
+
+def summarize_drawing(workspace: WorkspaceConfig, drawing: Drawing) -> str:
+    """Human-readable dry-run summary of a planned drawing.
+
+    Reports stroke and (resampled) point counts, the drawing's bounding box,
+    and the servo pose mapped to each paper corner. Intentionally does **not**
+    require calibration: if poses are missing it says so instead of raising, so
+    you can sanity-check artwork before capturing poses on real hardware.
+    """
+    spacing = workspace.drawing.point_spacing_mm
+    strokes = [s for s in drawing if len(s) >= 2]
+    n_points = sum(len(resample_stroke(s, spacing)) for s in strokes)
+
+    paper = workspace.paper
+    lines = [
+        f"dry run: {len(strokes)} stroke(s), {n_points} point(s) "
+        f"after resampling at {spacing:g} mm spacing",
+        f"paper: {paper.width_mm:g} x {paper.height_mm:g} mm",
+    ]
+
+    pts = [p for s in strokes for p in s]
+    if pts:
+        xs = [p[0] for p in pts]
+        ys = [p[1] for p in pts]
+        lines.append(
+            f"drawing bounds: x {min(xs):.1f}..{max(xs):.1f} mm, "
+            f"y {min(ys):.1f}..{max(ys):.1f} mm"
+        )
+
+    missing = [n for n in _REQUIRED_POSES if not workspace.has_pose(n)]
+    if missing:
+        lines.append("corner poses: not calibrated (missing " + ", ".join(missing) + ")")
+    else:
+        corners = {
+            "corner_bl": (0.0, 0.0),
+            "corner_br": (paper.width_mm, 0.0),
+            "corner_tl": (0.0, paper.height_mm),
+            "corner_tr": (paper.width_mm, paper.height_mm),
+        }
+        lines.append("corner poses:")
+        for name, (x, y) in corners.items():
+            pose_str = ", ".join(f"{a:g}" for a in workspace.pose(name))
+            lines.append(f"  {name} ({x:g}, {y:g}) -> [{pose_str}]")
+    return "\n".join(lines)
 
 
 class StrokePlanner:
@@ -38,8 +84,7 @@ class StrokePlanner:
 
     def require_poses(self) -> None:
         """Raise a clear error if calibration poses are missing."""
-        needed = [*_CORNERS, "pen_up", "pen_down", "home"]
-        missing = [n for n in needed if not self.ws.has_pose(n)]
+        missing = [n for n in _REQUIRED_POSES if not self.ws.has_pose(n)]
         if missing:
             raise RuntimeError(
                 "missing calibration poses: "

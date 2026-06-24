@@ -18,7 +18,7 @@ from painterbot.apps._common import (
     setup_logging,
 )
 from painterbot.drawing.path_sampler import fit_to_paper
-from painterbot.drawing.stroke_planner import StrokePlanner
+from painterbot.drawing.stroke_planner import StrokePlanner, summarize_drawing
 from painterbot.drawing.svg_loader import load_svg
 
 
@@ -31,6 +31,12 @@ def main(argv=None) -> int:
         default=None,
         help="render planned paths to a PNG and skip arm motion",
     )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="print stroke/point counts and corner poses, then exit "
+        "(no arm connection, no calibration required)",
+    )
     add_connection_args(parser)
     args = parser.parse_args(argv)
     setup_logging(args.verbose)
@@ -39,6 +45,10 @@ def main(argv=None) -> int:
 
     drawing = load_svg(args.svg)
     drawing = fit_to_paper(drawing, ws_cfg.paper)
+
+    if args.dry_run:
+        print(summarize_drawing(ws_cfg, drawing))
+        return 0
 
     if args.preview:
         from painterbot.drawing.preview import save_preview
