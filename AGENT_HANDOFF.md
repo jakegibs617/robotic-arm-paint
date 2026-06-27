@@ -13,17 +13,20 @@ everything that touches **real hardware**: the actual serial wire protocol, real
 calibration poses, and the marker holder. The MVP milestone — *robot draws a
 square on paper* — is blocked on Phase 1 hardware bring-up, not on more software.
 
-Tests: `37 passed, 0 skipped` **when run via `.venv/bin/python -m pytest`**. Note:
+Tests: `53 passed, 0 skipped` **when run via `.venv/bin/python -m pytest`**. Note:
 `python` is shell-aliased to a pyenv interpreter that lacks this project's deps, so
-always call the venv interpreter explicitly (see Setup gotcha below). homography now
-has coverage (`tests/test_calibration.py`).
+always call the venv interpreter explicitly (see Setup gotcha below). homography
+(`tests/test_calibration.py`), preview (`tests/test_preview.py`), the iphone stubs
+(`tests/test_iphone.py`), and the `--dry-run` summary (`tests/test_dry_run.py`) now
+have coverage.
 
 ## How to orient yourself (do this first)
 
 ```bash
 cd /Users/jacobgiberson/Desktop/robotic-arm
 source .venv/bin/activate
-python -m pytest -q                       # confirm baseline (24 passed, 1 skipped)
+python -m pytest -q                       # confirm baseline (53 passed, 0 skipped)
+python -m painterbot.apps.draw_shape --shape square --dry-run   # counts + corner poses, no arm
 python -m painterbot.apps.draw_shape --shape square --preview out/square.png --mock
 python -m painterbot.apps.draw_shape --shape square --mock -v   # watch mock servo commands
 ```
@@ -75,10 +78,11 @@ corners + pen_up/pen_down, save those poses, interpolate between them).
    are unset. The planner raises a clear error until they're captured via the jog CLI
    on real hardware and saved to `configs/workspace.calibrated.yaml`.
 4. **Marker holder** — no `.stl`/`.step`, only a README.
-5. **Test coverage gaps** — no tests for `calibrate_workspace`, `iphone/*`, or
-   `preview`. (`homography` is now covered by `tests/test_calibration.py`; serial
-   transport is covered including encoders + a fake-serial round-trip.)
-   `test_svg_loader` skips only if svgpathtools is missing from the active interpreter.
+5. **Test coverage gaps** — no tests for `calibrate_workspace` (needs an OpenCV
+   display/click UI). `homography`, `preview`, the `iphone/*` error paths, the
+   `--dry-run` summary, and serial transport (encoders + fake-serial round-trip) are
+   now covered. `test_svg_loader` skips only if svgpathtools is missing from the
+   active interpreter.
 
 ## Recommended next task for you
 
@@ -91,11 +95,15 @@ These harden the stack so the first hardware session goes smoothly:
   with `PySerialBackend` accepting an injectable `serial_obj` for testing. Covered by
   `tests/test_control.py`. Remaining work here is hardware-only: verify/replace the
   framing once the real board is identified (Phase 1).
-- **Add tests** for `calibration/homography.py` (round-trip a known square),
-  `drawing/preview.py`, and the iphone stubs (error paths without optional deps).
-- **Make the svgpathtools skip go away** by ensuring deps install cleanly (see gotcha).
-- **A `painterbot.apps.draw_svg` / `draw_shape` `--dry-run` summary** that prints
-  stroke/point counts and the pose for each corner without needing calibration.
+- ✅ **DONE — test coverage**: `calibration/homography.py` (`test_calibration.py`),
+  `drawing/preview.py` (`test_preview.py`), and the iphone stubs' error paths
+  (`test_iphone.py`) are covered. svgpathtools tests no longer skip (deps installed).
+- ✅ **DONE — `--dry-run` summary**: both `draw_shape` and `draw_svg` accept
+  `--dry-run`, printing stroke/point counts, drawing bounds, and the corner poses
+  (or a "not calibrated" notice) with no arm connection. Helper:
+  `summarize_drawing` in `stroke_planner.py`; covered by `test_dry_run.py`.
+- Remaining software-only ideas: a test for `apps/calibrate_workspace` (needs a
+  headless way to drive the OpenCV click UI), and richer SVG fixtures.
 
 ### If hardware IS available (the MVP critical path)
 Follow [initial_plan.md](initial_plan.md) Phases 1→5 in order:
