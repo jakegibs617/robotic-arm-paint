@@ -307,7 +307,7 @@
     {
       "id": "SW-013",
       "title": "Document hardware-arrival checklist as machine-trackable data",
-      "status": "todo",
+      "status": "done",
       "priority": "P2",
       "area": "docs_tooling",
       "hardware_required": false,
@@ -320,7 +320,12 @@
       ],
       "blocked_by": [],
       "depends_on": [],
-      "evidence": []
+      "evidence": [
+        "Added docs/hardware_bringup_checklist.json with machine-trackable power, serial, baud, servo ID, ping, safe range, and calibration pose items.",
+        "Each item has status, hardware_required, source links, expected values, and record fields for hardware-session results.",
+        "Checklist links to docs/hardware_identification.md and docs/calibration.md without duplicating their long prose.",
+        "Verified with .venv/bin/python -m pytest tests/test_hardware_checklist.py."
+      ]
     },
     {
       "id": "SW-014",

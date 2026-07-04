@@ -1,0 +1,149 @@
+{
+  "version": 1,
+  "project": "painterbot",
+  "purpose": "Machine-trackable checklist for the first physical hardware session.",
+  "status_values": ["todo", "in_progress", "done", "blocked", "skipped"],
+  "sources": [
+    "docs/hardware_identification.md",
+    "docs/calibration.md"
+  ],
+  "items": [
+    {
+      "id": "HW-POWER-001",
+      "title": "Verify external servo power supply",
+      "status": "todo",
+      "hardware_required": true,
+      "category": "power",
+      "source": "docs/hardware_identification.md#bring-up-checklist-do-in-order-one-servo-at-a-time",
+      "expected": {
+        "voltage_v_nominal": 7.4,
+        "supply_current_a_min": 5,
+        "usb_only_allowed": false
+      },
+      "record": {
+        "measured_voltage_v": null,
+        "supply_rating_a": null,
+        "power_switch_location": null,
+        "notes": null
+      }
+    },
+    {
+      "id": "HW-SERIAL-001",
+      "title": "Identify FE-URT-2 serial adapter on macOS",
+      "status": "todo",
+      "hardware_required": true,
+      "category": "serial",
+      "source": "docs/hardware_identification.md#serial-connection",
+      "expected": {
+        "device_globs": ["/dev/tty.usbserial-*", "/dev/tty.wchusbserial*"],
+        "usb_chip_family": "CH34x"
+      },
+      "record": {
+        "system_profiler_name": null,
+        "serial_port": null,
+        "driver_installed": null,
+        "notes": null
+      }
+    },
+    {
+      "id": "HW-SERIAL-002",
+      "title": "Confirm STS3215 baud and protocol",
+      "status": "todo",
+      "hardware_required": true,
+      "category": "serial",
+      "source": "docs/hardware_identification.md#serial-connection",
+      "expected": {
+        "baud": 1000000,
+        "protocol": "sts3215",
+        "config_file": "configs/arm.default.yaml"
+      },
+      "record": {
+        "configured_port": null,
+        "configured_baud": null,
+        "configured_protocol": null,
+        "notes": null
+      }
+    },
+    {
+      "id": "HW-ID-001",
+      "title": "Assign servo IDs to match config channels",
+      "status": "todo",
+      "hardware_required": true,
+      "category": "servo_ids",
+      "source": "docs/hardware_identification.md#bring-up-checklist-do-in-order-one-servo-at-a-time",
+      "expected": {
+        "connect_one_servo_at_a_time": true,
+        "ids": {
+          "base": 0,
+          "shoulder": 1,
+          "elbow": 2,
+          "wrist_pitch": 3,
+          "wrist_roll": 4,
+          "gripper": 5
+        }
+      },
+      "record": {
+        "assigned_ids_verified": false,
+        "tool_used": null,
+        "notes": null
+      }
+    },
+    {
+      "id": "HW-PING-001",
+      "title": "Ping/read every configured servo",
+      "status": "todo",
+      "hardware_required": true,
+      "category": "feedback",
+      "source": "docs/hardware_identification.md#bring-up-checklist-do-in-order-one-servo-at-a-time",
+      "expected": {
+        "position_feedback_required": true,
+        "servo_ids": [0, 1, 2, 3, 4, 5]
+      },
+      "record": {
+        "successful_ids": [],
+        "failed_ids": [],
+        "notes": null
+      }
+    },
+    {
+      "id": "HW-RANGE-001",
+      "title": "Measure safe servo ranges",
+      "status": "todo",
+      "hardware_required": true,
+      "category": "safe_ranges",
+      "source": "docs/hardware_identification.md#safe-servo-ranges",
+      "expected": {
+        "copy_results_to": "configs/arm.default.yaml",
+        "joints": ["base", "shoulder", "elbow", "wrist_pitch", "wrist_roll", "gripper"]
+      },
+      "record": {
+        "ranges_deg": {
+          "base": {"min": null, "max": null, "home": null},
+          "shoulder": {"min": null, "max": null, "home": null},
+          "elbow": {"min": null, "max": null, "home": null},
+          "wrist_pitch": {"min": null, "max": null, "home": null},
+          "wrist_roll": {"min": null, "max": null, "home": null},
+          "gripper": {"min": null, "max": null, "home": null}
+        },
+        "notes": null
+      }
+    },
+    {
+      "id": "HW-CAL-001",
+      "title": "Capture required drawing calibration poses",
+      "status": "todo",
+      "hardware_required": true,
+      "category": "calibration",
+      "source": "docs/calibration.md#mvp-manual-pose-calibration-phase-5",
+      "expected": {
+        "save_to": "configs/workspace.calibrated.yaml",
+        "poses": ["home", "pen_up", "pen_down", "corner_bl", "corner_br", "corner_tl", "corner_tr"]
+      },
+      "record": {
+        "captured_poses": [],
+        "used_hand_guided_capture": null,
+        "notes": null
+      }
+    }
+  ]
+}
