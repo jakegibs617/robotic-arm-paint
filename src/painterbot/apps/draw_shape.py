@@ -58,6 +58,7 @@ def main(argv=None) -> int:
         print(f"wrote preview to {out} ({len(drawing)} stroke(s))")
         return 0
 
+    plan.validate_for_execution(ws_cfg)
     arm = connect(args, arm_cfg)
     try:
         planner = StrokePlanner(arm, ws_cfg)
