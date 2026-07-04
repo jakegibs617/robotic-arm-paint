@@ -12,9 +12,12 @@ paper convention (+y up) before it gets fit to the paper.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path as FilePath
 
 from painterbot.drawing.path_sampler import Drawing, Stroke
+
+_TRANSFORM_RE = re.compile(r"([a-zA-Z]+)\(([^)]*)\)")
 
 
 def load_svg(path: str | FilePath, *, samples_per_path: int = 200) -> Drawing:
@@ -30,10 +33,11 @@ def load_svg(path: str | FilePath, *, samples_per_path: int = 200) -> Drawing:
             "svgpathtools is required to load SVGs; `pip install svgpathtools`"
         ) from exc
 
-    paths, _attrs = svg2paths(str(path))
+    paths, attrs = svg2paths(str(path))
 
     drawing: Drawing = []
-    for sub in paths:
+    for sub, attr in zip(paths, attrs):
+        transform = _parse_transform(attr.get("transform", ""))
         # Split into continuous runs so disjoint subpaths become separate strokes.
         for continuous in sub.continuous_subpaths():
             length = continuous.length()
@@ -42,7 +46,7 @@ def load_svg(path: str | FilePath, *, samples_per_path: int = 200) -> Drawing:
             n = max(2, samples_per_path)
             stroke: Stroke = []
             for i in range(n + 1):
-                pt = continuous.point(i / n)
+                pt = transform(continuous.point(i / n))
                 # Flip y: SVG y grows downward, paper y grows upward.
                 stroke.append((pt.real, -pt.imag))
             drawing.append(stroke)
@@ -50,3 +54,41 @@ def load_svg(path: str | FilePath, *, samples_per_path: int = 200) -> Drawing:
     if not drawing:
         raise ValueError(f"no drawable paths found in {path}")
     return drawing
+
+
+def _parse_transform(spec: str):
+    transforms = []
+    for name, raw_args in _TRANSFORM_RE.findall(spec):
+        args = [
+            float(part)
+            for part in re.split(r"[\s,]+", raw_args.strip())
+            if part
+        ]
+        name = name.lower()
+        if name == "translate":
+            tx = args[0] if args else 0.0
+            ty = args[1] if len(args) > 1 else 0.0
+            transforms.append(
+                lambda pt, tx=tx, ty=ty: complex(pt.real + tx, pt.imag + ty)
+            )
+        elif name == "scale":
+            sx = args[0] if args else 1.0
+            sy = args[1] if len(args) > 1 else sx
+            transforms.append(
+                lambda pt, sx=sx, sy=sy: complex(pt.real * sx, pt.imag * sy)
+            )
+        elif name == "matrix" and len(args) == 6:
+            a, b, c, d, e, f = args
+            transforms.append(
+                lambda pt, a=a, b=b, c=c, d=d, e=e, f=f: complex(
+                    a * pt.real + c * pt.imag + e,
+                    b * pt.real + d * pt.imag + f,
+                )
+            )
+
+    def apply(pt: complex) -> complex:
+        for transform in reversed(transforms):
+            pt = transform(pt)
+        return pt
+
+    return apply

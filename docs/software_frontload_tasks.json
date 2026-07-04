@@ -193,7 +193,7 @@
     {
       "id": "SW-008",
       "title": "Expand SVG fixture coverage",
-      "status": "todo",
+      "status": "done",
       "priority": "P2",
       "area": "drawing",
       "hardware_required": false,
@@ -206,7 +206,12 @@
       ],
       "blocked_by": [],
       "depends_on": [],
-      "evidence": []
+      "evidence": [
+        "Added deterministic SVG fixtures under tests/fixtures/svg for curves, multiple paths, transforms, empty SVG, and text-only unsupported input.",
+        "Expanded tests/test_svg_loader.py to cover curve flattening, multiple strokes, transform bounds, and invalid/empty behavior.",
+        "Documented unsupported SVG features in docs/svg_support.md.",
+        "Verified with .venv/bin/python -m pytest tests/test_svg_loader.py."
+      ]
     },
     {
       "id": "SW-009",
