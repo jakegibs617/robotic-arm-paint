@@ -1,6 +1,12 @@
 import pytest
+from pydantic import ValidationError
 
-from painterbot.config import JointConfig, load_arm_config, load_workspace_config
+from painterbot.config import (
+    JointConfig,
+    WorkspaceConfig,
+    load_arm_config,
+    load_workspace_config,
+)
 
 
 def test_arm_config_loads_six_joints():
@@ -41,3 +47,35 @@ def test_missing_pose_raises_helpful_error():
     with pytest.raises(KeyError):
         ws.pose("pen_down")
     assert not ws.has_pose("pen_down")
+
+
+def test_workspace_allows_missing_and_null_default_poses():
+    ws = WorkspaceConfig.model_validate({"poses": {"home": None}})
+
+    assert ws.poses == {"home": None}
+    assert not ws.has_pose("home")
+
+
+def test_workspace_rejects_too_short_pose():
+    with pytest.raises(ValidationError, match="pose 'home': expected 6"):
+        WorkspaceConfig.model_validate({"poses": {"home": [90, 90, 90]}})
+
+
+def test_workspace_rejects_too_long_pose():
+    with pytest.raises(ValidationError, match="pose 'home': expected 6"):
+        WorkspaceConfig.model_validate({"poses": {"home": [1, 2, 3, 4, 5, 6, 7]}})
+
+
+def test_workspace_rejects_nonnumeric_pose_value():
+    with pytest.raises(ValidationError, match="pose 'pen_up': angle 2 is not numeric"):
+        WorkspaceConfig.model_validate(
+            {"poses": {"pen_up": [90, 90, "bad", 90, 90, 30]}}
+        )
+
+
+def test_workspace_accepts_valid_pose_shape():
+    ws = WorkspaceConfig.model_validate(
+        {"poses": {"home": [90, 90, 90, 90, 90, 30]}}
+    )
+
+    assert ws.pose("home") == [90, 90, 90, 90, 90, 30]

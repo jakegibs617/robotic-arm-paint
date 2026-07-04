@@ -93,6 +93,29 @@ class WorkspaceConfig(BaseModel):
     poses: dict[str, Optional[list[float]]] = Field(default_factory=dict)
     drawing: DrawingConfig = Field(default_factory=DrawingConfig)
 
+    @field_validator("poses", mode="before")
+    @classmethod
+    def _pose_shapes(cls, v):
+        if v is None:
+            return {}
+        if not isinstance(v, dict):
+            raise ValueError("poses must be a mapping of pose name to 6 angles or null")
+        for name, pose in v.items():
+            if pose is None:
+                continue
+            if not isinstance(pose, (list, tuple)):
+                raise ValueError(f"pose {name!r}: expected 6 numeric angles or null")
+            if len(pose) != 6:
+                raise ValueError(
+                    f"pose {name!r}: expected 6 numeric angles, got {len(pose)}"
+                )
+            for idx, angle in enumerate(pose):
+                if isinstance(angle, bool) or not isinstance(angle, (int, float)):
+                    raise ValueError(
+                        f"pose {name!r}: angle {idx} is not numeric"
+                    )
+        return v
+
     def pose(self, name: str) -> list[float]:
         p = self.poses.get(name)
         if p is None:

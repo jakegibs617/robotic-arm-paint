@@ -262,7 +262,7 @@
     {
       "id": "SW-011",
       "title": "Add config validation for workspace pose shape",
-      "status": "todo",
+      "status": "done",
       "priority": "P1",
       "area": "config",
       "hardware_required": false,
@@ -275,7 +275,12 @@
       ],
       "blocked_by": [],
       "depends_on": [],
-      "evidence": []
+      "evidence": [
+        "Added WorkspaceConfig pose validation for present pose values during config load.",
+        "Required present poses must be six numeric angles; missing and null poses remain allowed.",
+        "Validation errors identify the bad pose name and specific length or nonnumeric value reason.",
+        "Verified with .venv/bin/python -m pytest tests/test_config.py tests/test_drawing_preflight.py."
+      ]
     },
     {
       "id": "SW-012",
