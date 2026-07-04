@@ -16,6 +16,14 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from painterbot.calibration.pose_calibration import CalibrationSession
+from painterbot.config import (
+    default_workspace_save_path,
+    load_arm_config,
+    load_workspace_config,
+    resolve_workspace_config_path,
+)
+
 
 def _click_corners(image_path: Path) -> list[tuple[float, float]]:
     import cv2
@@ -49,13 +57,34 @@ def _click_corners(image_path: Path) -> list[tuple[float, float]]:
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="iPhone-photo workspace calibration.")
-    parser.add_argument("--image", required=True, type=Path)
+    parser.add_argument("--image", type=Path)
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="print manual calibration steps and current completion state",
+    )
+    parser.add_argument(
+        "--arm-config",
+        type=Path,
+        default=None,
+        help="path to arm config YAML (default: configs/arm.default.yaml)",
+    )
+    parser.add_argument(
+        "--workspace-config",
+        type=Path,
+        default=None,
+        help="workspace config to inspect or save",
+    )
     args = parser.parse_args(argv)
 
-    from painterbot.calibration.homography import compute_homography
-    from painterbot.config import load_workspace_config
+    if args.dry_run:
+        return _dry_run(args)
+    if args.image is None:
+        parser.error("--image is required unless --dry-run is set")
 
-    ws = load_workspace_config()
+    from painterbot.calibration.homography import compute_homography
+
+    ws = load_workspace_config(args.workspace_config)
     corners = _click_corners(args.image)
     h = compute_homography(corners, ws.paper.width_mm, ws.paper.height_mm)
 
@@ -67,13 +96,41 @@ def main(argv=None) -> int:
         "image_corners_px": corners,
         "homography": h.tolist(),
     }
-    out = Path("configs") / "workspace.calibrated.yaml"
+    out = default_workspace_save_path(args.workspace_config)
     import yaml
 
     out.parent.mkdir(parents=True, exist_ok=True)
     with out.open("w", encoding="utf-8") as f:
         yaml.safe_dump(extra, f, sort_keys=False)
     print(f"wrote calibration to {out}")
+    return 0
+
+
+def _dry_run(args) -> int:
+    arm_cfg = load_arm_config(args.arm_config)
+    ws_cfg = load_workspace_config(args.workspace_config)
+    session = CalibrationSession(ws_cfg, arm_cfg)
+    source = resolve_workspace_config_path(args.workspace_config)
+    target = default_workspace_save_path(args.workspace_config)
+
+    print("manual calibration dry run:")
+    print(f"workspace source: {source}")
+    print(f"save target: {target}")
+    print("required poses:")
+    for name in session.required_poses:
+        marker = "set" if ws_cfg.has_pose(name) else "missing"
+        print(f"  {name}: {marker}")
+    missing = session.missing_poses()
+    if missing:
+        print("complete: no")
+        print("missing: " + ", ".join(missing))
+    else:
+        print("complete: yes")
+    errors = session.validate_existing()
+    if errors:
+        print("validation errors:")
+        for error in errors:
+            print(f"  {error}")
     return 0
 
 

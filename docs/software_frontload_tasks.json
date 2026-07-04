@@ -118,7 +118,7 @@
     {
       "id": "SW-005",
       "title": "Add guided calibration dry-run command",
-      "status": "todo",
+      "status": "done",
       "priority": "P1",
       "area": "calibration",
       "hardware_required": false,
@@ -133,7 +133,12 @@
       "depends_on": [
         "SW-004"
       ],
-      "evidence": []
+      "evidence": [
+        "Added painterbot-calibrate --dry-run path that runs without image UI or hardware.",
+        "Prints required pose set/missing state, completion state, workspace source, and save target.",
+        "Reuses CalibrationSession for required pose and validation logic.",
+        "Verified with .venv/bin/python -m pytest tests/test_calibration_dry_run.py tests/test_pose_calibration.py tests/test_config.py."
+      ]
     },
     {
       "id": "SW-006",
