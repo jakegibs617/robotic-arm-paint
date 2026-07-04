@@ -46,7 +46,7 @@
     {
       "id": "SW-002",
       "title": "Design fake STS3215 serial harness",
-      "status": "todo",
+      "status": "done",
       "priority": "P0",
       "area": "serial",
       "hardware_required": false,
@@ -59,7 +59,12 @@
       ],
       "blocked_by": [],
       "depends_on": [],
-      "evidence": []
+      "evidence": [
+        "Added painterbot.testing.fake_sts3215.FakeSTS3215Serial reusable pyserial-compatible harness.",
+        "Supports multi-ID position replies plus short read, checksum, wrong-ID, no-reply, and stale-packet simulations.",
+        "Documented simulated versus unknown hardware behavior in the fake harness module docstring.",
+        "Verified with .venv/bin/python -m pytest tests/test_fake_sts3215.py."
+      ]
     },
     {
       "id": "SW-003",
