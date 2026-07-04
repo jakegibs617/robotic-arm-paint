@@ -69,7 +69,7 @@
     {
       "id": "SW-003",
       "title": "Add servo ping/read preflight API",
-      "status": "todo",
+      "status": "done",
       "priority": "P0",
       "area": "serial",
       "hardware_required": false,
@@ -84,7 +84,12 @@
       "depends_on": [
         "SW-002"
       ],
-      "evidence": []
+      "evidence": [
+        "Added painterbot.control.preflight.read_servo_preflight with structured ServoPreflightResult statuses.",
+        "Classifies missing feedback, no reply, wrong ID, bad checksum, success, and unknown errors separately.",
+        "Uses only backend.read_servo, with tests confirming no goal-position writes occur.",
+        "Verified with .venv/bin/python -m pytest tests/test_servo_preflight.py tests/test_fake_sts3215.py tests/test_control.py."
+      ]
     },
     {
       "id": "SW-004",
