@@ -39,6 +39,32 @@ def _print_protocols() -> None:
         print(f"  {protocol} feedback={_feedback_text(protocol)}")
 
 
+def _print_mock_session(args) -> None:
+    preview = args.preview
+    workspace = args.workspace
+    print("mock hardware session transcript:")
+    print("# setup")
+    print(".venv/bin/python -m pip install -e '.[dev]'")
+    print("# inspect calibration state")
+    print("painterbot-calibrate --dry-run")
+    print("# dry-run artwork without connecting to an arm")
+    print(f"painterbot-draw-shape --shape {args.shape} --dry-run")
+    print("# render a preview PNG without moving hardware")
+    print(f"painterbot-draw-shape --shape {args.shape} --preview {preview}")
+    print("# mock execution with a synthetic calibrated workspace")
+    print(
+        f"painterbot-draw-shape --shape {args.shape} --mock "
+        f"--workspace-config {workspace}"
+    )
+    print("expected output:")
+    print("  dry run: stroke and point counts plus estimated servo commands")
+    print(f"  wrote preview to {preview}")
+    print(f"  drew {args.shape}: N stroke(s)")
+    print("notes:")
+    print("  No real serial port is opened when --mock is used.")
+    print("  Use a temp/synthetic workspace file; real configs are not modified.")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Mock-safe servo bus bring-up inspection tools."
@@ -57,6 +83,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="list known serial protocols and whether they support feedback",
     )
     protocols_parser.set_defaults(func=lambda args: _print_protocols())
+
+    session_parser = sub.add_parser(
+        "mock-session",
+        help="print a repeatable no-hardware workflow transcript",
+    )
+    session_parser.add_argument(
+        "--shape",
+        default="line",
+        choices=("line", "square", "circle", "spiral", "star"),
+    )
+    session_parser.add_argument("--preview", default="out/mock-session.png")
+    session_parser.add_argument(
+        "--workspace",
+        default="out/mock-calibrated-workspace.yaml",
+        help="synthetic calibrated workspace path shown in the transcript",
+    )
+    session_parser.set_defaults(func=_print_mock_session)
     return parser
 
 
