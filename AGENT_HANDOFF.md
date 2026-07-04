@@ -8,17 +8,24 @@ robot arm to draw on flat paper with a marker. The full roadmap is in
 
 The **entire software stack runs end-to-end today in mock mode** (no hardware).
 You can plan a square/star/SVG, map it to servo poses, and "execute" it against an
-in-memory mock serial backend that logs every command. What's missing is
-everything that touches **real hardware**: the actual serial wire protocol, real
-calibration poses, and the marker holder. The MVP milestone — *robot draws a
-square on paper* — is blocked on Phase 1 hardware bring-up, not on more software.
+in-memory mock serial backend that logs every command.
 
-Tests: `53 passed, 0 skipped` **when run via `.venv/bin/python -m pytest`**. Note:
+**Hardware is ordered (July 2026) and identified**: 6× Feetech **STS3215** serial
+bus servos (7.4V, 19 kg·cm, 360° magnetic encoder with position feedback) plus an
+**FE-URT-2** USB→TTL bus adapter — the Mac drives the servo bus directly; there is
+no controller board. The `sts3215` wire protocol (write position, read position,
+torque on/off) is implemented and unit-tested against known byte frames, but
+**unverified on real hardware** until the parts arrive. What's missing is Phase 1
+bring-up (IDs, power, safe ranges), real calibration poses, the arm frame, and the
+marker holder. The MVP milestone — *robot draws a square on paper* — is blocked on
+hardware arrival, not on more software.
+
+Tests: `63 passed, 0 skipped` **when run via `.venv/bin/python -m pytest`**. Note:
 `python` is shell-aliased to a pyenv interpreter that lacks this project's deps, so
 always call the venv interpreter explicitly (see Setup gotcha below). homography
 (`tests/test_calibration.py`), preview (`tests/test_preview.py`), the iphone stubs
-(`tests/test_iphone.py`), and the `--dry-run` summary (`tests/test_dry_run.py`) now
-have coverage.
+(`tests/test_iphone.py`), the `--dry-run` summary (`tests/test_dry_run.py`), and the
+sts3215 framing/feedback path (`tests/test_control.py`) now have coverage.
 
 ## How to orient yourself (do this first)
 
@@ -46,7 +53,7 @@ corners + pen_up/pen_down, save those poses, interpolate between them).
 
 | Area | File | Status |
 |------|------|--------|
-| Serial transport | [control/serial_controller.py](src/painterbot/control/serial_controller.py) | ✅ mock + pyserial backends; pluggable protocol registry (`mock` / `ascii_servo` placeholder / `lx16a`). Real wire framing still **unverified** until the board is identified |
+| Serial transport | [control/serial_controller.py](src/painterbot/control/serial_controller.py) | ✅ mock + pyserial backends; protocol registry (`mock` / `sts3215` / `ascii_servo` / `lx16a`). `sts3215` matches the ordered hardware and adds feedback (position read, torque on/off); **unverified on real hardware** |
 | Servo (limits, invert) | [control/servo.py](src/painterbot/control/servo.py) | ✅ done |
 | Arm facade (interp motion, stop/resume) | [control/arm.py](src/painterbot/control/arm.py) | ✅ done |
 | Config models | [config.py](src/painterbot/config.py) | ✅ pydantic, YAML load/save |
@@ -64,25 +71,29 @@ corners + pen_up/pen_down, save those poses, interpolate between them).
 
 ## What is NOT done (the real gaps)
 
-1. **Real serial protocol** — the transport now has a pluggable encoder registry
-   (`register_protocol` / `get_encoder` in `serial_controller.py`) with `mock`,
-   `ascii_servo` (placeholder `S <ch> <angle>\n`), and `lx16a` (LX-16A bus-servo
-   binary framing) built in. **None of the real framings are verified against
-   hardware** — baud/handshake and whether the board even speaks LX-16A are unknown
-   until it's identified. Once known, register the board-specific encoder (a
-   one-liner) and set `protocol:` in [configs/arm.default.yaml](configs/arm.default.yaml).
-2. **Phase 1 hardware bring-up** — board not identified, serial port unknown, safe
-   per-joint min/max angles are **guesses** in the config. [docs/hardware_identification.md](docs/hardware_identification.md)
-   is an empty template to fill in.
+1. **Hardware verification of `sts3215`** — the framing (write Goal_Position 0x2A,
+   read Present_Position 0x38, Torque_Enable 0x28; `0xFF 0xFF` header, little-endian,
+   4096 counts/360°) is implemented from the Feetech memory map and unit-tested
+   against expected byte frames, but has never touched a real servo. First hardware
+   session: set `protocol: sts3215` + `serial.port` in
+   [configs/arm.default.yaml](configs/arm.default.yaml) and verify against one servo.
+2. **Phase 1 hardware bring-up** — parts ordered, not arrived. Serial port unknown;
+   servo IDs must be assigned 0–5 (they ship as ID 1); safe per-joint min/max in the
+   config are **guesses for a 0–180 hobby servo** — STS3215 is 0–360 with mid at 180,
+   so expect to re-center. Checklist lives in
+   [docs/hardware_identification.md](docs/hardware_identification.md).
 3. **Real calibration poses** — `home`, `pen_up`, `pen_down`, `corner_bl/br/tl/tr`
-   are unset. The planner raises a clear error until they're captured via the jog CLI
-   on real hardware and saved to `configs/workspace.calibrated.yaml`.
-4. **Marker holder** — no `.stl`/`.step`, only a README.
+   are unset. The planner raises a clear error until they're captured and saved to
+   `configs/workspace.calibrated.yaml`. With STS3215 feedback the fast path is
+   hand-guided capture in the jog CLI: `torque off` → move by hand → `read` →
+   `save <name>` (see [docs/calibration.md](docs/calibration.md)).
+4. **Arm frame + marker holder** — no frame in the order yet (servos + adapter only);
+   marker holder has no `.stl`/`.step`, only a README.
 5. **Test coverage gaps** — no tests for `calibrate_workspace` (needs an OpenCV
    display/click UI). `homography`, `preview`, the `iphone/*` error paths, the
-   `--dry-run` summary, and serial transport (encoders + fake-serial round-trip) are
-   now covered. `test_svg_loader` skips only if svgpathtools is missing from the
-   active interpreter.
+   `--dry-run` summary, and serial transport (encoders, sts3215 feedback round-trip,
+   fake-serial) are covered. `test_svg_loader` skips only if svgpathtools is missing
+   from the active interpreter.
 
 ## Recommended next task for you
 
@@ -102,21 +113,30 @@ These harden the stack so the first hardware session goes smoothly:
   `--dry-run`, printing stroke/point counts, drawing bounds, and the corner poses
   (or a "not calibrated" notice) with no arm connection. Helper:
   `summarize_drawing` in `stroke_planner.py`; covered by `test_dry_run.py`.
-- Remaining software-only ideas: a test for `apps/calibrate_workspace` (needs a
-  headless way to drive the OpenCV click UI), and richer SVG fixtures.
+- ✅ **DONE — sts3215 protocol + feedback**: `sts3215` encoder in the registry,
+  plus a `FeedbackProtocol` layer (position read / torque on-off) surfaced as
+  `Arm.read_pose` / `sync_from_hardware` / `set_torque` and jog-CLI `read` /
+  `torque on|off` for hand-guided calibration. Byte-level tests in
+  `tests/test_control.py`.
+- Remaining software-only ideas: a small servo-ID assignment/ping CLI for
+  bring-up day (scan the bus, set IDs 0–5, verify), a test for
+  `apps/calibrate_workspace` (needs a headless way to drive the OpenCV click
+  UI), and richer SVG fixtures.
 
 ### If hardware IS available (the MVP critical path)
-Follow [initial_plan.md](initial_plan.md) Phases 1→5 in order:
-1. Identify the controller board; find the serial device
-   (`ls /dev/tty.usb*`); fill in [docs/hardware_identification.md](docs/hardware_identification.md).
-2. Pick/register the **real serial protocol** (try `lx16a` if the arm uses LX-16A
-   bus servos, else `register_protocol` the board's framing); set `protocol:` in the
-   config, then move one servo, then all servos.
-3. Tighten safe min/max in [configs/arm.default.yaml](configs/arm.default.yaml) to
-   measured values.
-4. Jog to and `save` the 7 calibration poses; `save-config` to
-   `configs/workspace.calibrated.yaml`.
-5. Run `draw_shape --shape square` (no `--mock`) and iterate until the square is clean.
+Hardware is STS3215 servos + FE-URT-2 adapter; follow the bring-up checklist in
+[docs/hardware_identification.md](docs/hardware_identification.md):
+1. Wire external 7.4V power into the FE-URT-2; find the serial device
+   (`ls /dev/tty.*usb*`); record it in the doc and config.
+2. Assign servo IDs 0–5 (= config channels) **one servo at a time** — they ship
+   as ID 1.
+3. Set `protocol: sts3215` and `serial.port` in
+   [configs/arm.default.yaml](configs/arm.default.yaml); verify a position `read`
+   and a small move on one servo, then all six.
+4. Tighten safe min/max to measured values (STS range is 0–360, mid 2048 = 180°).
+5. Capture the 7 calibration poses hands-on: `torque off` → move by hand → `read`
+   → `save <name>`; then `save-config` to `configs/workspace.calibrated.yaml`.
+6. Run `draw_shape --shape square` (no `--mock`) and iterate until the square is clean.
 
 ## Setup gotchas
 

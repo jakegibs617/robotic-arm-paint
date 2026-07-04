@@ -14,18 +14,29 @@ without touching the backend or the rest of the stack.
 Built-in protocols:
 
 * ``mock``        — no wire at all; runs fully in software (``MockSerialBackend``).
-* ``ascii_servo`` — ``S <channel> <angle>\\n`` per line. A human-readable
-  **placeholder**; sniff the real board and replace/extend before trusting it.
+* ``sts3215``     — Feetech STS/SMS serial-bus servo framing (Dynamixel-1.0-style
+  ``0xFF 0xFF`` packets, little-endian registers, 4096 counts per 360°). This is
+  the arm's real protocol (STS3215 servos behind an FE-URT USB adapter). Servo
+  bus IDs are assumed equal to the config ``channel`` (assign IDs 0..5 during
+  bring-up). Framing is per the Feetech memory map but **unverified against
+  hardware** until the servos arrive.
+* ``ascii_servo`` — ``S <channel> <angle>\\n`` per line. Placeholder kept for the
+  Arduino-PWM-bridge fallback path.
 * ``lx16a``       — LewanSoul / HiWonder LX-16A serial-bus servo binary protocol
-  (``SERVO_MOVE_TIME_WRITE``). A concrete worked example of a real framing; only
-  correct if the arm actually uses LX-16A servos.
+  (``SERVO_MOVE_TIME_WRITE``). Kept as a worked example of another real framing.
 
 Register your own with ``register_protocol(name, encoder)``.
+
+Protocols with servo feedback (position reads, torque on/off) additionally have a
+``FeedbackProtocol`` registered; ``sts3215`` is the only built-in one. Feedback
+enables hand-guided calibration: torque off, move the arm by hand, read the pose
+back from the magnetic encoders.
 """
 
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from typing import Callable, Optional, Protocol
 
 logger = logging.getLogger("painterbot.serial")
@@ -35,9 +46,17 @@ ProtocolEncoder = Callable[[int, float], bytes]
 
 
 class SerialBackend(Protocol):
-    """Minimal transport interface used by the rest of the package."""
+    """Minimal transport interface used by the rest of the package.
+
+    ``read_servo`` and ``set_torque`` need a protocol with feedback support
+    (e.g. ``sts3215``); backends without it raise ``RuntimeError``.
+    """
 
     def write_servo(self, channel: int, angle: float) -> None: ...
+
+    def read_servo(self, channel: int) -> Optional[float]: ...
+
+    def set_torque(self, channel: int, enabled: bool) -> None: ...
 
     def close(self) -> None: ...
 
@@ -74,6 +93,84 @@ def _encode_lx16a(channel: int, angle: float, *, move_time_ms: int = 0) -> bytes
     return bytes([0x55, 0x55, *body, checksum])
 
 
+# -- Feetech STS3215 (SCS/STS bus servo) --------------------------------------
+#
+# Frame layout (Dynamixel-protocol-1.0-style):
+#
+#     0xFF 0xFF ID LENGTH INSTRUCTION PARAM... CHECKSUM
+#
+# LENGTH = len(params) + 2, CHECKSUM = ~(ID + LENGTH + INSTR + params) & 0xFF
+# (header excluded). STS-series registers are little-endian (low byte first).
+# Position resolution: 4096 counts per 360° (mid position 2048 = 180°).
+
+_STS_INSTR_READ = 0x02
+_STS_INSTR_WRITE = 0x03
+_STS_REG_TORQUE_ENABLE = 0x28  # 40, 1 byte
+_STS_REG_GOAL_POSITION = 0x2A  # 42, 2 bytes
+_STS_REG_PRESENT_POSITION = 0x38  # 56, 2 bytes
+_STS_COUNTS_PER_REV = 4096
+_STS_POSITION_REPLY_LEN = 8  # FF FF ID LEN ERR POS_LO POS_HI CHK
+
+
+def _sts_packet(servo_id: int, instruction: int, params: list[int]) -> bytes:
+    body = [servo_id & 0xFF, len(params) + 2, instruction, *params]
+    checksum = (~sum(body)) & 0xFF
+    return bytes([0xFF, 0xFF, *body, checksum])
+
+
+def _encode_sts3215(channel: int, angle: float) -> bytes:
+    """WRITE Goal_Position. The servo bus ID is the config channel (0..5)."""
+    pos = max(0, min(_STS_COUNTS_PER_REV - 1, round(angle * _STS_COUNTS_PER_REV / 360.0)))
+    params = [_STS_REG_GOAL_POSITION, pos & 0xFF, (pos >> 8) & 0xFF]
+    return _sts_packet(channel, _STS_INSTR_WRITE, params)
+
+
+def _encode_sts3215_torque(channel: int, enabled: bool) -> bytes:
+    """WRITE Torque_Enable — 0 makes the servo limp (hand-guidable)."""
+    return _sts_packet(
+        channel, _STS_INSTR_WRITE, [_STS_REG_TORQUE_ENABLE, 1 if enabled else 0]
+    )
+
+
+def _encode_sts3215_read_position(channel: int) -> bytes:
+    """READ 2 bytes at Present_Position."""
+    return _sts_packet(channel, _STS_INSTR_READ, [_STS_REG_PRESENT_POSITION, 2])
+
+
+def _parse_sts3215_position_reply(data: bytes, channel: int) -> float:
+    """Decode a Present_Position status packet into degrees.
+
+    Raises ``RuntimeError`` on a missing/short/corrupt reply — during bring-up a
+    loud, hex-dumped failure beats a silent wrong angle.
+    """
+    if len(data) < _STS_POSITION_REPLY_LEN:
+        raise RuntimeError(
+            f"servo {channel}: no/short position reply ({len(data)} bytes: "
+            f"{data.hex(' ') or '<empty>'}); check power, wiring, ID and baud"
+        )
+    if data[0:2] != b"\xff\xff":
+        raise RuntimeError(f"servo {channel}: bad reply header {data[:2].hex(' ')}")
+    if data[2] != channel:
+        raise RuntimeError(f"servo {channel}: reply came from ID {data[2]}")
+    if (~sum(data[2:7])) & 0xFF != data[7]:
+        raise RuntimeError(f"servo {channel}: reply checksum mismatch ({data.hex(' ')})")
+    if data[4] != 0:
+        # Error flags (voltage/overheat/overload...) — position is still valid.
+        logger.warning("servo %d reports error flags 0x%02x", channel, data[4])
+    pos = data[5] | (data[6] << 8)
+    return pos * 360.0 / _STS_COUNTS_PER_REV
+
+
+@dataclass(frozen=True)
+class FeedbackProtocol:
+    """Optional read/torque capability for bus servos with encoders."""
+
+    encode_torque: Callable[[int, bool], bytes]
+    encode_read_position: Callable[[int], bytes]
+    parse_position_reply: Callable[[bytes, int], float]
+    reply_length: int
+
+
 # -- protocol registry -------------------------------------------------------
 
 # ``mock`` is handled by MockSerialBackend and has no real wire encoder, so it is
@@ -81,12 +178,29 @@ def _encode_lx16a(channel: int, angle: float, *, move_time_ms: int = 0) -> bytes
 _ENCODERS: dict[str, ProtocolEncoder] = {
     "ascii_servo": _encode_ascii_servo,
     "lx16a": _encode_lx16a,
+    "sts3215": _encode_sts3215,
+}
+
+# Protocols that can also read positions and toggle torque.
+_FEEDBACK: dict[str, FeedbackProtocol] = {
+    "sts3215": FeedbackProtocol(
+        encode_torque=_encode_sts3215_torque,
+        encode_read_position=_encode_sts3215_read_position,
+        parse_position_reply=_parse_sts3215_position_reply,
+        reply_length=_STS_POSITION_REPLY_LEN,
+    ),
 }
 
 
-def register_protocol(name: str, encoder: ProtocolEncoder) -> None:
-    """Register (or override) a wire encoder under ``name``."""
+def register_protocol(
+    name: str,
+    encoder: ProtocolEncoder,
+    feedback: Optional[FeedbackProtocol] = None,
+) -> None:
+    """Register (or override) a wire encoder (and optional feedback) under ``name``."""
     _ENCODERS[name] = encoder
+    if feedback is not None:
+        _FEEDBACK[name] = feedback
 
 
 def available_protocols() -> list[str]:
@@ -105,6 +219,11 @@ def get_encoder(protocol: str) -> ProtocolEncoder:
         ) from None
 
 
+def get_feedback(protocol: str) -> Optional[FeedbackProtocol]:
+    """Feedback capability for ``protocol``, or ``None`` if it is write-only."""
+    return _FEEDBACK.get(protocol)
+
+
 # -- backends ----------------------------------------------------------------
 
 
@@ -120,11 +239,21 @@ class MockSerialBackend:
     def __init__(self) -> None:
         self.history: list[tuple[int, float]] = []
         self.state: dict[int, float] = {}
+        self.torque: dict[int, bool] = {}
 
     def write_servo(self, channel: int, angle: float) -> None:
         self.history.append((channel, angle))
         self.state[channel] = angle
         logger.info("MOCK %s", _encode_ascii_servo(channel, angle).decode().strip())
+
+    def read_servo(self, channel: int) -> Optional[float]:
+        """Mock feedback: the servo is exactly where it was last commanded
+        (``None`` if never commanded)."""
+        return self.state.get(channel)
+
+    def set_torque(self, channel: int, enabled: bool) -> None:
+        self.torque[channel] = enabled
+        logger.info("MOCK torque ch=%d %s", channel, "on" if enabled else "off")
 
     def close(self) -> None:
         logger.info("MOCK serial closed (%d commands sent)", len(self.history))
@@ -147,9 +276,11 @@ class PySerialBackend:
         timeout_s: float = 1.0,
         *,
         encoder: Optional[ProtocolEncoder] = None,
+        feedback: Optional[FeedbackProtocol] = None,
         serial_obj: object | None = None,
     ) -> None:
         self._encode: ProtocolEncoder = encoder or _encode_ascii_servo
+        self._feedback = feedback
         if serial_obj is not None:
             self._serial = serial_obj
             logger.info("Using injected serial object for %s", port)
@@ -168,6 +299,43 @@ class PySerialBackend:
         payload = self._encode(channel, angle)
         self._serial.write(payload)
         logger.debug("TX ch=%d angle=%.1f bytes=%s", channel, angle, payload.hex(" "))
+
+    def _require_feedback(self, what: str) -> FeedbackProtocol:
+        if self._feedback is None:
+            raise RuntimeError(
+                f"{what} needs a protocol with feedback support (e.g. sts3215); "
+                "the current protocol is write-only"
+            )
+        return self._feedback
+
+    def read_servo(self, channel: int) -> Optional[float]:
+        fb = self._require_feedback("read_servo")
+        # One retry: a write-ack still in transit at flush time can corrupt the
+        # first reply (the parser catches it); the second attempt starts clean.
+        last_exc: Optional[RuntimeError] = None
+        for attempt in (1, 2):
+            # STS servos ack every write by default, so stale status packets may
+            # sit in the input buffer — drop them before pairing request/reply.
+            reset = getattr(self._serial, "reset_input_buffer", None)
+            if reset is not None:
+                reset()
+            self._serial.write(fb.encode_read_position(channel))
+            raw = self._serial.read(fb.reply_length)
+            try:
+                angle = fb.parse_position_reply(raw, channel)
+            except RuntimeError as exc:
+                last_exc = exc
+                logger.warning("read_servo ch=%d attempt %d failed: %s", channel, attempt, exc)
+                continue
+            logger.debug("RX ch=%d angle=%.2f bytes=%s", channel, angle, raw.hex(" "))
+            return angle
+        assert last_exc is not None
+        raise last_exc
+
+    def set_torque(self, channel: int, enabled: bool) -> None:
+        fb = self._require_feedback("set_torque")
+        self._serial.write(fb.encode_torque(channel, enabled))
+        logger.info("torque ch=%d %s", channel, "on" if enabled else "off")
 
     def close(self) -> None:
         try:
@@ -197,4 +365,10 @@ def open_backend(
         raise ValueError(
             "no serial port given; pass --port /dev/tty.usbserial-XXXX or use --mock"
         )
-    return PySerialBackend(port=port, baud=baud, timeout_s=timeout_s, encoder=encoder)
+    return PySerialBackend(
+        port=port,
+        baud=baud,
+        timeout_s=timeout_s,
+        encoder=encoder,
+        feedback=get_feedback(protocol),
+    )

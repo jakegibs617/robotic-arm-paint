@@ -21,6 +21,17 @@ or inverse kinematics involved — you physically jog the arm and save each pose
 
 4. Persist them: `save-config` (writes `configs/workspace.calibrated.yaml`).
 
+**Hand-guided capture (recommended with STS3215 servos):** instead of jogging
+joint-by-joint, run `torque off`, physically move the arm to each target while
+supporting it, then `read` (adopts the encoder positions as the current pose)
+and `save <name>`. Finish with `torque on` — it re-syncs from the encoders and
+re-asserts the current position as the goal before enabling torque, to guard
+against snap-back to a stale goal (verify on the first hardware session). If a
+hand-moved joint sits outside its configured safe range, `torque on` refuses
+and motion commands are blocked until you move it back in range and `read`
+again. This is faster and more precise than numeric jogging because the
+magnetic encoders report the true pose.
+
 `pen_up` / `pen_down` should be captured at the same XY location so their
 difference is a pure pen-lift delta. The four corners define the drawing plane;
 any paper coordinate is mapped by bilinear interpolation between them (see

@@ -90,6 +90,16 @@ class Arm:
             raise RuntimeError("arm is stopped; call resume() before moving")
         if len(target) != len(self.servos):
             raise ValueError(f"pose needs {len(self.servos)} angles, got {len(target)}")
+        # Check the *start* pose before writing anything: a hand-guided joint
+        # synced outside its safe range must not trigger a partial pose write
+        # (Servo.move_to would raise, but only after earlier joints moved).
+        out = [s for s in self.servos if not s.config.in_range(s.angle)]
+        if out:
+            joints = ", ".join(f"{s.name}={s.angle:.1f}°" for s in out)
+            raise RuntimeError(
+                f"current pose is outside safe range ({joints}); with torque off, "
+                "hand-move the joint(s) back in range and `read` again before moving"
+            )
 
         if not interpolate:
             self._write_pose(target, clamp=clamp)
@@ -113,6 +123,25 @@ class Arm:
     def home(self, **kwargs) -> None:
         """Move to the configured home pose."""
         self.move_to_pose(self.config.home_pose, **kwargs)
+
+    # -- feedback (STS-class bus servos) --------------------------------------
+
+    def read_pose(self) -> list[Optional[float]]:
+        """Read actual encoder positions (does not change commanded state)."""
+        return [s.read_actual() for s in self.servos]
+
+    def sync_from_hardware(self) -> list[Optional[float]]:
+        """Adopt encoder positions as the commanded pose (after hand-guiding)."""
+        return [s.sync() for s in self.servos]
+
+    def set_torque(self, enabled: bool) -> None:
+        """Torque all servos on/off. Off makes the arm limp — support it!
+
+        Re-enable via the jog CLI's ``torque on``, which syncs from the encoders
+        first so the next move starts from the arm's true pose.
+        """
+        for s in self.servos:
+            self.backend.set_torque(s.channel, enabled)
 
     # -- safety / lifecycle --------------------------------------------------
 
