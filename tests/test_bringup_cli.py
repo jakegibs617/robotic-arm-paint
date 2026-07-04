@@ -33,3 +33,16 @@ def test_bringup_protocols_reports_feedback_support(capsys):
     assert "mock feedback=no" in out
     assert "ascii_servo feedback=no" in out
     assert "sts3215 feedback=yes" in out
+
+
+def test_bringup_mock_session_prints_no_hardware_workflow(capsys):
+    assert bringup.main(["mock-session", "--shape", "square"]) == 0
+
+    out = capsys.readouterr().out
+    assert "mock hardware session transcript:" in out
+    assert "painterbot-calibrate --dry-run" in out
+    assert "painterbot-draw-shape --shape square --dry-run" in out
+    assert "painterbot-draw-shape --shape square --preview out/mock-session.png" in out
+    assert "--mock --workspace-config out/mock-calibrated-workspace.yaml" in out
+    assert "expected output:" in out
+    assert "real configs are not modified" in out

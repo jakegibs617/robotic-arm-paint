@@ -285,7 +285,7 @@
     {
       "id": "SW-012",
       "title": "Add mock hardware session transcript command",
-      "status": "todo",
+      "status": "done",
       "priority": "P2",
       "area": "docs_tooling",
       "hardware_required": false,
@@ -297,7 +297,12 @@
       ],
       "blocked_by": [],
       "depends_on": [],
-      "evidence": []
+      "evidence": [
+        "Added painterbot-bringup mock-session command that prints a repeatable no-hardware workflow transcript.",
+        "Transcript shows setup, calibration dry-run, drawing dry-run, preview generation, mock draw command, and expected output.",
+        "Command is print-only and directs users to temp/synthetic workspace paths so real configs are not modified.",
+        "Verified with .venv/bin/python -m pytest tests/test_bringup_cli.py."
+      ]
     },
     {
       "id": "SW-013",
