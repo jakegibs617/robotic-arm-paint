@@ -143,7 +143,7 @@
     {
       "id": "SW-006",
       "title": "Introduce DrawingPlan preflight object",
-      "status": "todo",
+      "status": "done",
       "priority": "P1",
       "area": "drawing",
       "hardware_required": false,
@@ -157,7 +157,12 @@
       ],
       "blocked_by": [],
       "depends_on": [],
-      "evidence": []
+      "evidence": [
+        "Added painterbot.drawing.plan.DrawingPlan storing fitted and resampled strokes.",
+        "Reports stroke count, point count, bounds, pose moves, and estimated servo commands without arm connection.",
+        "Routed draw_shape and draw_svg planning through DrawingPlan while preserving dry-run summaries.",
+        "Verified with .venv/bin/python -m pytest tests/test_drawing_plan.py tests/test_dry_run.py tests/test_drawing.py tests/test_svg_loader.py."
+      ]
     },
     {
       "id": "SW-007",

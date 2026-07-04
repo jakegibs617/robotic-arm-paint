@@ -20,6 +20,7 @@ from typing import Optional
 
 from painterbot.config import WorkspaceConfig
 from painterbot.control.arm import Arm
+from painterbot.drawing.plan import DrawingPlan
 from painterbot.drawing.path_sampler import Drawing, Point, resample_stroke
 
 logger = logging.getLogger("painterbot.planner")
@@ -37,23 +38,29 @@ def summarize_drawing(workspace: WorkspaceConfig, drawing: Drawing) -> str:
     you can sanity-check artwork before capturing poses on real hardware.
     """
     spacing = workspace.drawing.point_spacing_mm
-    strokes = [s for s in drawing if len(s) >= 2]
-    n_points = sum(len(resample_stroke(s, spacing)) for s in strokes)
+    plan = DrawingPlan(
+        fitted_strokes=drawing,
+        resampled_strokes=[
+            resample_stroke(s, spacing)
+            for s in drawing
+            if len(s) >= 2
+        ],
+        spacing_mm=spacing,
+    )
 
     paper = workspace.paper
     lines = [
-        f"dry run: {len(strokes)} stroke(s), {n_points} point(s) "
+        f"dry run: {plan.stroke_count} stroke(s), {plan.point_count} point(s) "
         f"after resampling at {spacing:g} mm spacing",
         f"paper: {paper.width_mm:g} x {paper.height_mm:g} mm",
+        f"estimated servo commands: {plan.estimated_servo_commands}",
     ]
 
-    pts = [p for s in strokes for p in s]
-    if pts:
-        xs = [p[0] for p in pts]
-        ys = [p[1] for p in pts]
+    if plan.point_count:
+        min_x, min_y, max_x, max_y = plan.bounds
         lines.append(
-            f"drawing bounds: x {min(xs):.1f}..{max(xs):.1f} mm, "
-            f"y {min(ys):.1f}..{max(ys):.1f} mm"
+            f"drawing bounds: x {min_x:.1f}..{max_x:.1f} mm, "
+            f"y {min_y:.1f}..{max_y:.1f} mm"
         )
 
     missing = [n for n in _REQUIRED_POSES if not workspace.has_pose(n)]

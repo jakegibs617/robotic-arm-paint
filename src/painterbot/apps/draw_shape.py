@@ -18,7 +18,7 @@ from painterbot.apps._common import (
     load_configs,
     setup_logging,
 )
-from painterbot.drawing.path_sampler import fit_to_paper
+from painterbot.drawing.plan import DrawingPlan
 from painterbot.drawing.shapes import SHAPE_NAMES, generate_shape
 from painterbot.drawing.stroke_planner import StrokePlanner, summarize_drawing
 
@@ -44,8 +44,8 @@ def main(argv=None) -> int:
 
     arm_cfg, ws_cfg = load_configs(args)
 
-    drawing = generate_shape(args.shape)
-    drawing = fit_to_paper(drawing, ws_cfg.paper)
+    plan = DrawingPlan.from_drawing(generate_shape(args.shape), ws_cfg)
+    drawing = plan.fitted_strokes
 
     if args.dry_run:
         print(summarize_drawing(ws_cfg, drawing))
