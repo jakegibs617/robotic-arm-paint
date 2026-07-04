@@ -15,6 +15,9 @@ Commands::
     goto <name>             move to a saved pose
     list                    list saved poses
     where                   print the current pose
+    read                    read encoder positions and adopt them as current pose
+    torque off              make all servos limp (hand-guide the arm; SUPPORT IT)
+    torque on               re-engage servos (syncs from encoders first, no jump)
     stop                    emergency stop (freeze)
     resume                  clear stop
     save-config [path]      write the workspace config (with poses) to disk
@@ -23,6 +26,10 @@ Commands::
 
 Jogging clamps to safe limits so you can't drive a servo past its configured
 range. Every command is logged.
+
+Hand-guided calibration (STS3215 / feedback servos): `torque off`, move the arm
+by hand to the target (a paper corner, pen_up, ...), `read`, `save <name>`,
+repeat, then `torque on` and `save-config`.
 """
 
 from __future__ import annotations
@@ -106,6 +113,21 @@ def run_repl(arm: Arm, ws_cfg, args) -> Arm:
                 _list_poses(ws_cfg)
             elif cmd == "where":
                 print(_fmt(arm.pose))
+            elif cmd == "read":
+                actual = arm.sync_from_hardware()
+                print("actual -> " + _fmt_optional(actual))
+            elif cmd == "torque":
+                mode = rest[0].lower()
+                if mode == "off":
+                    arm.set_torque(False)
+                    print("torque OFF — arm is limp, support it by hand")
+                elif mode == "on":
+                    # Sync first so re-engaging doesn't jump to a stale pose.
+                    arm.sync_from_hardware()
+                    arm.set_torque(True)
+                    print(f"torque ON at {_fmt(arm.pose)}")
+                else:
+                    print("usage: torque on|off")
             elif cmd == "stop":
                 arm.stop()
                 print("STOPPED — type 'resume' to continue")
@@ -127,6 +149,10 @@ def run_repl(arm: Arm, ws_cfg, args) -> Arm:
 
 def _fmt(pose) -> str:
     return "[" + ", ".join(f"{a:.1f}" for a in pose) + "]"
+
+
+def _fmt_optional(pose) -> str:
+    return "[" + ", ".join("?" if a is None else f"{a:.1f}" for a in pose) + "]"
 
 
 def _list_poses(ws_cfg) -> None:

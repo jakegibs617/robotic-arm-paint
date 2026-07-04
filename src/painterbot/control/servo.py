@@ -54,3 +54,28 @@ class Servo:
         self._backend.write_servo(self.channel, self._to_wire(angle))
         self.angle = angle
         return angle
+
+    def read_actual(self) -> float | None:
+        """Read the encoder position (logical degrees), or ``None`` if unknown.
+
+        Needs a feedback-capable backend/protocol (e.g. sts3215); raises
+        ``RuntimeError`` otherwise. Does not change the commanded ``angle``.
+        """
+        wire = self._backend.read_servo(self.channel)
+        if wire is None:
+            return None
+        # The invert reflection is its own inverse, so _to_wire also un-inverts.
+        return self._to_wire(wire)
+
+    def sync(self) -> float | None:
+        """Adopt the encoder position as the commanded angle (for hand-guiding).
+
+        After torque-off + moving the joint by hand, this makes ``angle`` match
+        reality so the next interpolated move starts from the true pose instead
+        of jumping. Returns the new angle, or ``None`` if the backend has no
+        position for this channel yet.
+        """
+        actual = self.read_actual()
+        if actual is not None:
+            self.angle = actual
+        return actual

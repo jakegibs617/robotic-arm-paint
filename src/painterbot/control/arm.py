@@ -114,6 +114,25 @@ class Arm:
         """Move to the configured home pose."""
         self.move_to_pose(self.config.home_pose, **kwargs)
 
+    # -- feedback (STS-class bus servos) --------------------------------------
+
+    def read_pose(self) -> list[Optional[float]]:
+        """Read actual encoder positions (does not change commanded state)."""
+        return [s.read_actual() for s in self.servos]
+
+    def sync_from_hardware(self) -> list[Optional[float]]:
+        """Adopt encoder positions as the commanded pose (after hand-guiding)."""
+        return [s.sync() for s in self.servos]
+
+    def set_torque(self, enabled: bool) -> None:
+        """Torque all servos on/off. Off makes the arm limp — support it!
+
+        Re-enable via the jog CLI's ``torque on``, which syncs from the encoders
+        first so the next move starts from the arm's true pose.
+        """
+        for s in self.servos:
+            self.backend.set_torque(s.channel, enabled)
+
     # -- safety / lifecycle --------------------------------------------------
 
     def stop(self) -> None:

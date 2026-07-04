@@ -5,6 +5,7 @@ from painterbot.control.serial_controller import (
     PySerialBackend,
     available_protocols,
     get_encoder,
+    get_feedback,
     open_backend,
     register_protocol,
 )
@@ -12,14 +13,23 @@ from painterbot.control.servo import ServoLimitError
 
 
 class FakeSerial:
-    """Stand-in for ``serial.Serial`` that records written bytes."""
+    """Stand-in for ``serial.Serial`` that records writes and serves canned reads."""
 
-    def __init__(self) -> None:
+    def __init__(self, to_read: bytes = b"") -> None:
         self.written: list[bytes] = []
         self.closed = False
+        self.to_read = to_read
+        self.input_resets = 0
 
     def write(self, payload: bytes) -> None:
         self.written.append(payload)
+
+    def read(self, n: int) -> bytes:
+        out, self.to_read = self.to_read[:n], self.to_read[n:]
+        return out
+
+    def reset_input_buffer(self) -> None:
+        self.input_resets += 1
 
     def close(self) -> None:
         self.closed = True
@@ -45,6 +55,7 @@ def test_available_protocols_lists_builtins():
     assert "mock" in protos
     assert "ascii_servo" in protos
     assert "lx16a" in protos
+    assert "sts3215" in protos
 
 
 def test_ascii_encoder_format():
@@ -62,6 +73,112 @@ def test_lx16a_encoder_packet():
     # checksum = ~(id + length + cmd + params) over the body, header excluded.
     body = payload[2:-1]
     assert payload[-1] == (~sum(body)) & 0xFF
+
+
+def test_sts3215_encoder_packet():
+    # 180 deg -> position 2048 (0x0800); WRITE Goal_Position (0x2A), little-endian.
+    payload = get_encoder("sts3215")(3, 180.0)
+    assert payload == bytes([0xFF, 0xFF, 0x03, 0x05, 0x03, 0x2A, 0x00, 0x08, 0xC2])
+    # checksum = ~(id + length + instr + params), header excluded.
+    assert payload[-1] == (~sum(payload[2:-1])) & 0xFF
+
+
+def test_sts3215_encoder_clamps_to_encoder_range():
+    # 4096 counts per rev, so valid positions are 0..4095.
+    assert get_encoder("sts3215")(0, 400.0)[6:8] == bytes([0xFF, 0x0F])  # 4095
+    assert get_encoder("sts3215")(0, -10.0)[6:8] == bytes([0x00, 0x00])  # 0
+
+
+def test_sts3215_torque_and_read_packets():
+    fb = get_feedback("sts3215")
+    assert fb is not None
+    # Torque_Enable (0x28) = 1 on servo 1.
+    assert fb.encode_torque(1, True) == bytes(
+        [0xFF, 0xFF, 0x01, 0x04, 0x03, 0x28, 0x01, 0xCE]
+    )
+    assert fb.encode_torque(1, False)[6] == 0x00
+    # READ 2 bytes at Present_Position (0x38).
+    assert fb.encode_read_position(1) == bytes(
+        [0xFF, 0xFF, 0x01, 0x04, 0x02, 0x38, 0x02, 0xBE]
+    )
+
+
+def _sts_position_reply(servo_id: int, pos: int) -> bytes:
+    body = [servo_id, 0x04, 0x00, pos & 0xFF, (pos >> 8) & 0xFF]
+    return bytes([0xFF, 0xFF, *body, (~sum(body)) & 0xFF])
+
+
+def test_sts3215_parse_position_reply():
+    fb = get_feedback("sts3215")
+    assert fb.parse_position_reply(_sts_position_reply(1, 1024), 1) == pytest.approx(90.0)
+    assert fb.parse_position_reply(_sts_position_reply(5, 2048), 5) == pytest.approx(180.0)
+
+
+def test_sts3215_parse_rejects_bad_replies():
+    fb = get_feedback("sts3215")
+    with pytest.raises(RuntimeError, match="no/short"):
+        fb.parse_position_reply(b"", 1)
+    with pytest.raises(RuntimeError, match="reply came from ID"):
+        fb.parse_position_reply(_sts_position_reply(2, 1024), 1)
+    corrupt = bytearray(_sts_position_reply(1, 1024))
+    corrupt[5] ^= 0xFF
+    with pytest.raises(RuntimeError, match="checksum"):
+        fb.parse_position_reply(bytes(corrupt), 1)
+
+
+def test_get_feedback_none_for_write_only_protocols():
+    assert get_feedback("ascii_servo") is None
+    assert get_feedback("lx16a") is None
+
+
+def test_pyserial_backend_read_and_torque_roundtrip():
+    fake = FakeSerial(to_read=_sts_position_reply(2, 1024))
+    be = PySerialBackend(
+        "/dev/fake",
+        encoder=get_encoder("sts3215"),
+        feedback=get_feedback("sts3215"),
+        serial_obj=fake,
+    )
+    assert be.read_servo(2) == pytest.approx(90.0)
+    assert fake.input_resets == 1  # stale write-acks must be flushed first
+    assert fake.written[-1] == get_feedback("sts3215").encode_read_position(2)
+    be.set_torque(2, False)
+    assert fake.written[-1] == get_feedback("sts3215").encode_torque(2, False)
+
+
+def test_pyserial_backend_without_feedback_raises():
+    be = PySerialBackend(
+        "/dev/fake", encoder=get_encoder("ascii_servo"), serial_obj=FakeSerial()
+    )
+    with pytest.raises(RuntimeError, match="write-only"):
+        be.read_servo(0)
+    with pytest.raises(RuntimeError, match="write-only"):
+        be.set_torque(0, False)
+
+
+def test_mock_backend_feedback():
+    be = MockSerialBackend()
+    assert be.read_servo(0) is None  # never commanded
+    be.write_servo(0, 45.0)
+    assert be.read_servo(0) == 45.0
+    be.set_torque(0, False)
+    assert be.torque == {0: False}
+
+
+def test_arm_feedback_via_mock(arm_config):
+    from painterbot.control.arm import Arm
+
+    backend = MockSerialBackend()
+    arm = Arm(arm_config, backend)
+    assert arm.read_pose() == [None] * 6
+    arm.move_to_pose([90, 90, 90, 90, 90, 30])
+    arm.set_torque(False)
+    assert backend.torque == {ch: False for ch in range(6)}
+    # Simulate hand-moving the base, then adopting encoder positions.
+    backend.state[0] = 120.0
+    synced = arm.sync_from_hardware()
+    assert synced[0] == pytest.approx(120.0)
+    assert arm.pose[0] == pytest.approx(120.0)
 
 
 def test_pyserial_backend_writes_encoded_bytes():

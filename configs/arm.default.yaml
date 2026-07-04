@@ -11,16 +11,22 @@
 # IMPORTANT: min/max are SAFE software limits in servo degrees. Commands outside
 # these ranges are rejected. Tighten them during Phase 1 hardware bring-up
 # (record real safe angles per joint before drawing).
+#
+# STS3215 note: the servo range is 0..360 deg with mid position at 180 deg
+# (encoder count 2048). The placeholder ranges below assume a 0..180 hobby
+# servo; expect to re-center them around 180 once horns are mounted.
 
 serial:
-  baud: 115200
+  # STS3215 factory default is 1 Mbps (only used for real connections).
+  baud: 1000000
   # Default port is null; pass --port on the CLI or set it here once known,
-  # e.g. /dev/tty.usbserial-1420
+  # e.g. /dev/tty.usbserial-1420 (FE-URT-2 adapter; see docs/hardware_identification.md)
   port: null
   timeout_s: 1.0
-  # Protocol the controller speaks. "mock" runs fully in software.
-  # Real wire encoders: "ascii_servo" (placeholder), "lx16a" (LX-16A bus servo).
-  # Register board-specific framing with register_protocol() during bring-up.
+  # Protocol the servos speak. "mock" runs fully in software; switch to
+  # "sts3215" (Feetech STS bus servos, the ordered hardware) for bring-up.
+  # Servo bus IDs must be assigned to match the channel numbers below (0..5).
+  # Other encoders: "ascii_servo" (Arduino PWM fallback), "lx16a".
   protocol: mock
 
 motion:
