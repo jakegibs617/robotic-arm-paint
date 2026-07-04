@@ -310,16 +310,27 @@ class PySerialBackend:
 
     def read_servo(self, channel: int) -> Optional[float]:
         fb = self._require_feedback("read_servo")
-        # STS servos ack every write by default, so stale status packets may sit
-        # in the input buffer — drop them before pairing our request with a reply.
-        reset = getattr(self._serial, "reset_input_buffer", None)
-        if reset is not None:
-            reset()
-        self._serial.write(fb.encode_read_position(channel))
-        raw = self._serial.read(fb.reply_length)
-        angle = fb.parse_position_reply(raw, channel)
-        logger.debug("RX ch=%d angle=%.2f bytes=%s", channel, angle, raw.hex(" "))
-        return angle
+        # One retry: a write-ack still in transit at flush time can corrupt the
+        # first reply (the parser catches it); the second attempt starts clean.
+        last_exc: Optional[RuntimeError] = None
+        for attempt in (1, 2):
+            # STS servos ack every write by default, so stale status packets may
+            # sit in the input buffer — drop them before pairing request/reply.
+            reset = getattr(self._serial, "reset_input_buffer", None)
+            if reset is not None:
+                reset()
+            self._serial.write(fb.encode_read_position(channel))
+            raw = self._serial.read(fb.reply_length)
+            try:
+                angle = fb.parse_position_reply(raw, channel)
+            except RuntimeError as exc:
+                last_exc = exc
+                logger.warning("read_servo ch=%d attempt %d failed: %s", channel, attempt, exc)
+                continue
+            logger.debug("RX ch=%d angle=%.2f bytes=%s", channel, angle, raw.hex(" "))
+            return angle
+        assert last_exc is not None
+        raise last_exc
 
     def set_torque(self, channel: int, enabled: bool) -> None:
         fb = self._require_feedback("set_torque")

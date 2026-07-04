@@ -44,6 +44,14 @@ class Servo:
         ``ServoLimitError`` — the safe default for path execution. With
         ``clamp=True`` the angle is silently clamped, useful for manual jogging.
         """
+        if not self.config.in_range(self.angle):
+            # A hand-guided joint synced outside its safe range: any in-range
+            # command would be an uncontrolled full-speed jump. Refuse.
+            raise ServoLimitError(
+                f"{self.name}: current position {self.angle:.1f}° is outside safe "
+                f"range [{self.config.min_deg}, {self.config.max_deg}]; with torque "
+                "off, hand-move it back in range and `read` again before moving"
+            )
         if not self.config.in_range(angle):
             if not clamp:
                 raise ServoLimitError(
@@ -77,5 +85,14 @@ class Servo:
         """
         actual = self.read_actual()
         if actual is not None:
+            if not self.config.in_range(actual):
+                logger.warning(
+                    "%s: encoder reads %.1f° — outside safe range [%s, %s]; "
+                    "hand-move it back in range before commanding motion",
+                    self.name,
+                    actual,
+                    self.config.min_deg,
+                    self.config.max_deg,
+                )
             self.angle = actual
         return actual

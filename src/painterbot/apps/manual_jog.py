@@ -17,7 +17,8 @@ Commands::
     where                   print the current pose
     read                    read encoder positions and adopt them as current pose
     torque off              make all servos limp (hand-guide the arm; SUPPORT IT)
-    torque on               re-engage servos (syncs from encoders first, no jump)
+    torque on               re-engage servos (syncs + re-asserts current pose as
+                            goal first; refuses if a joint is outside safe range)
     stop                    emergency stop (freeze)
     resume                  clear stop
     save-config [path]      write the workspace config (with poses) to disk
@@ -105,6 +106,12 @@ def run_repl(arm: Arm, ws_cfg, args) -> Arm:
                 name = rest[0]
                 ws_cfg.poses[name] = list(arm.pose)
                 print(f"saved pose {name!r} = {_fmt(arm.pose)}")
+                bad = _out_of_range(arm)
+                if bad:
+                    print(
+                        f"warning: pose has out-of-range joints ({bad}); "
+                        "drawing will fail until limits are widened or the pose is recaptured"
+                    )
             elif cmd == "goto":
                 name = rest[0]
                 arm.move_to_pose(ws_cfg.pose(name), clamp=True)
@@ -117,15 +124,23 @@ def run_repl(arm: Arm, ws_cfg, args) -> Arm:
                 actual = arm.sync_from_hardware()
                 print("actual -> " + _fmt_optional(actual))
             elif cmd == "torque":
-                mode = rest[0].lower()
+                mode = rest[0].lower() if rest else ""
                 if mode == "off":
                     arm.set_torque(False)
                     print("torque OFF — arm is limp, support it by hand")
                 elif mode == "on":
-                    # Sync first so re-engaging doesn't jump to a stale pose.
+                    # Sync so software state matches reality before re-engaging.
                     arm.sync_from_hardware()
-                    arm.set_torque(True)
-                    print(f"torque ON at {_fmt(arm.pose)}")
+                    bad = _out_of_range(arm)
+                    if bad:
+                        print(f"NOT enabling torque — outside safe range: {bad}")
+                        print("hand-move those joints back in range, then 'torque on' again")
+                    else:
+                        # Re-assert goal := present so firmware that chases a
+                        # stale Goal_Position on enable doesn't snap back.
+                        arm.move_to_pose(arm.pose, interpolate=False)
+                        arm.set_torque(True)
+                        print(f"torque ON at {_fmt(arm.pose)}")
                 else:
                     print("usage: torque on|off")
             elif cmd == "stop":
@@ -153,6 +168,15 @@ def _fmt(pose) -> str:
 
 def _fmt_optional(pose) -> str:
     return "[" + ", ".join("?" if a is None else f"{a:.1f}" for a in pose) + "]"
+
+
+def _out_of_range(arm: Arm) -> str:
+    """Joints whose current angle is outside safe limits, as 'name=deg' list."""
+    return ", ".join(
+        f"{s.name}={s.angle:.1f}°"
+        for s in arm.servos
+        if not s.config.in_range(s.angle)
+    )
 
 
 def _list_poses(ws_cfg) -> None:

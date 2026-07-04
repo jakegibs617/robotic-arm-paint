@@ -90,6 +90,16 @@ class Arm:
             raise RuntimeError("arm is stopped; call resume() before moving")
         if len(target) != len(self.servos):
             raise ValueError(f"pose needs {len(self.servos)} angles, got {len(target)}")
+        # Check the *start* pose before writing anything: a hand-guided joint
+        # synced outside its safe range must not trigger a partial pose write
+        # (Servo.move_to would raise, but only after earlier joints moved).
+        out = [s for s in self.servos if not s.config.in_range(s.angle)]
+        if out:
+            joints = ", ".join(f"{s.name}={s.angle:.1f}°" for s in out)
+            raise RuntimeError(
+                f"current pose is outside safe range ({joints}); with torque off, "
+                "hand-move the joint(s) back in range and `read` again before moving"
+            )
 
         if not interpolate:
             self._write_pose(target, clamp=clamp)

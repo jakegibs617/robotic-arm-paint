@@ -181,6 +181,60 @@ def test_arm_feedback_via_mock(arm_config):
     assert arm.pose[0] == pytest.approx(120.0)
 
 
+def test_motion_blocked_from_out_of_range_start(arm_config):
+    from painterbot.control.arm import Arm
+
+    backend = MockSerialBackend()
+    arm = Arm(arm_config, backend)
+    arm.move_to_pose([90, 90, 90, 90, 90, 30])
+    # Hand-guided past the base's 180 limit (STS range is physically 0..360).
+    backend.state[0] = 200.0
+    arm.sync_from_hardware()
+    history_before = list(backend.history)
+    # Pose moves must refuse before writing anything (even with clamp=True,
+    # which would otherwise command a full-speed jump to the boundary).
+    with pytest.raises(RuntimeError, match="outside safe range"):
+        arm.move_to_pose([90, 90, 90, 90, 90, 30], clamp=True)
+    with pytest.raises(RuntimeError, match="outside safe range"):
+        arm.home(clamp=True)
+    # Single-joint moves refuse too.
+    with pytest.raises(ServoLimitError, match="current position"):
+        arm.set_joint("base", 90, clamp=True)
+    assert backend.history == history_before  # nothing was commanded
+    # Hand-moving back in range and re-syncing unblocks motion.
+    backend.state[0] = 170.0
+    arm.sync_from_hardware()
+    arm.move_to_pose([90, 90, 90, 90, 90, 30], clamp=True)
+    assert backend.state[0] == 90
+
+
+def test_read_servo_retries_after_corrupt_reply():
+    good = _sts_position_reply(1, 2048)
+    corrupt = bytearray(good)
+    corrupt[5] ^= 0xFF  # bad checksum on the first reply
+    fake = FakeSerial(to_read=bytes(corrupt) + good)
+    be = PySerialBackend(
+        "/dev/fake",
+        encoder=get_encoder("sts3215"),
+        feedback=get_feedback("sts3215"),
+        serial_obj=fake,
+    )
+    assert be.read_servo(1) == pytest.approx(180.0)
+    assert fake.input_resets == 2  # flushed before each attempt
+
+
+def test_read_servo_raises_after_two_bad_replies():
+    fake = FakeSerial(to_read=b"\x00" * 16)
+    be = PySerialBackend(
+        "/dev/fake",
+        encoder=get_encoder("sts3215"),
+        feedback=get_feedback("sts3215"),
+        serial_obj=fake,
+    )
+    with pytest.raises(RuntimeError, match="bad reply header"):
+        be.read_servo(1)
+
+
 def test_pyserial_backend_writes_encoded_bytes():
     fake = FakeSerial()
     be = PySerialBackend(
