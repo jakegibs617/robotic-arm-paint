@@ -239,7 +239,7 @@
     {
       "id": "SW-010",
       "title": "Headless calibration UI testability pass",
-      "status": "todo",
+      "status": "done",
       "priority": "P1",
       "area": "calibration",
       "hardware_required": false,
@@ -252,7 +252,12 @@
       ],
       "blocked_by": [],
       "depends_on": [],
-      "evidence": []
+      "evidence": [
+        "Added pure homography helpers for named corner order, destination paper corners, and corner count validation.",
+        "Split calibration payload building and YAML persistence out of the OpenCV click loop.",
+        "Added headless tests for corner ordering, payload generation, config saving, and invalid image path errors.",
+        "Verified with .venv/bin/python -m pytest tests/test_calibration_app_headless.py tests/test_calibration.py tests/test_calibration_dry_run.py."
+      ]
     },
     {
       "id": "SW-011",
