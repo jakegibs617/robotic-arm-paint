@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from painterbot.calibration.pose_calibration import REQUIRED_POSES
 from painterbot.config import WorkspaceConfig
 from painterbot.drawing.path_sampler import (
     Drawing,
@@ -11,6 +12,10 @@ from painterbot.drawing.path_sampler import (
     fit_to_paper,
     resample_stroke,
 )
+
+
+class DrawingPreflightError(ValueError):
+    """Raised when a drawing cannot be safely executed."""
 
 
 @dataclass(frozen=True)
@@ -58,6 +63,19 @@ class DrawingPlan:
     @property
     def estimated_servo_commands(self) -> int:
         return self.estimated_pose_moves * 6
+
+    def validate_for_execution(self, workspace: WorkspaceConfig) -> None:
+        """Raise before arm connection when execution would be unsafe."""
+        missing = [name for name in REQUIRED_POSES if not workspace.has_pose(name)]
+        if missing:
+            raise DrawingPreflightError(
+                "missing calibration poses: " + ", ".join(missing)
+            )
+        if self.stroke_count == 0:
+            raise DrawingPreflightError("drawing has no drawable strokes")
+        min_x, min_y, max_x, max_y = self.bounds
+        if min_x == max_x and min_y == max_y:
+            raise DrawingPreflightError("drawing is degenerate after fitting")
 
     def summary(self, workspace: WorkspaceConfig) -> str:
         paper = workspace.paper

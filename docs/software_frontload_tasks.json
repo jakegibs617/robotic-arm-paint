@@ -167,7 +167,7 @@
     {
       "id": "SW-007",
       "title": "Add drawing preflight safety checks",
-      "status": "todo",
+      "status": "done",
       "priority": "P0",
       "area": "drawing",
       "hardware_required": false,
@@ -183,7 +183,12 @@
       "depends_on": [
         "SW-006"
       ],
-      "evidence": []
+      "evidence": [
+        "Added DrawingPlan.validate_for_execution with missing calibration, empty drawing, and degenerate drawing checks.",
+        "Drawing CLIs now validate execution plans before opening any arm connection.",
+        "Paper margin failures are caught during DrawingPlan construction before connection.",
+        "Verified with .venv/bin/python -m pytest tests/test_drawing_preflight.py tests/test_drawing_plan.py tests/test_dry_run.py."
+      ]
     },
     {
       "id": "SW-008",
