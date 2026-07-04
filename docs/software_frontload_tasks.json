@@ -94,7 +94,7 @@
     {
       "id": "SW-004",
       "title": "Create calibration session domain object",
-      "status": "todo",
+      "status": "done",
       "priority": "P1",
       "area": "calibration",
       "hardware_required": false,
@@ -108,7 +108,12 @@
       ],
       "blocked_by": [],
       "depends_on": [],
-      "evidence": []
+      "evidence": [
+        "Added painterbot.calibration.pose_calibration.CalibrationSession with required pose tracking.",
+        "Supports capture_current and capture for required or custom pose names.",
+        "Validates six numeric finite angles against configured joint safe ranges.",
+        "Verified with .venv/bin/python -m pytest tests/test_pose_calibration.py tests/test_calibration.py."
+      ]
     },
     {
       "id": "SW-005",
