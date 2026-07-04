@@ -20,9 +20,10 @@ bring-up (IDs, power, safe ranges), real calibration poses, the arm frame, and t
 marker holder. The MVP milestone — *robot draws a square on paper* — is blocked on
 hardware arrival, not on more software.
 
-Tests: `63 passed, 0 skipped` **when run via `.venv/bin/python -m pytest`**. Note:
+Tests should be run via **`.venv/bin/python -m pytest`**. Note:
 `python` is shell-aliased to a pyenv interpreter that lacks this project's deps, so
-always call the venv interpreter explicitly (see Setup gotcha below). homography
+always call the venv interpreter explicitly (see [docs/verification.md](docs/verification.md)
+and Setup gotcha below). homography
 (`tests/test_calibration.py`), preview (`tests/test_preview.py`), the iphone stubs
 (`tests/test_iphone.py`), the `--dry-run` summary (`tests/test_dry_run.py`), and the
 sts3215 framing/feedback path (`tests/test_control.py`) now have coverage.
@@ -32,7 +33,7 @@ sts3215 framing/feedback path (`tests/test_control.py`) now have coverage.
 ```bash
 cd /Users/jacobgiberson/Desktop/robotic-arm
 source .venv/bin/activate
-python -m pytest -q                       # confirm baseline (53 passed, 0 skipped)
+.venv/bin/python -m pytest -q             # confirm baseline
 python -m painterbot.apps.draw_shape --shape square --dry-run   # counts + corner poses, no arm
 python -m painterbot.apps.draw_shape --shape square --preview out/square.png --mock
 python -m painterbot.apps.draw_shape --shape square --mock -v   # watch mock servo commands
@@ -165,7 +166,10 @@ Hardware is STS3215 servos + FE-URT-2 adapter; follow the bring-up checklist in
 ## Verify your work
 
 ```bash
-python -m pytest -q                                    # keep green
-python -m painterbot.apps.draw_svg examples/star.svg --preview out/star.png --mock
-python -m painterbot.apps.manual_jog --mock            # exercise the REPL
+.venv/bin/python -m pytest -q
+.venv/bin/python -m painterbot.apps.draw_svg examples/star.svg --preview out/star.png
+.venv/bin/python -m painterbot.apps.bringup mock-session
 ```
+
+See [docs/verification.md](docs/verification.md) for the full local checklist,
+including no-hardware dry-run and preview commands plus optional scan extras.

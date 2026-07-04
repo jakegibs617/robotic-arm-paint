@@ -330,7 +330,7 @@
     {
       "id": "SW-014",
       "title": "Add CI-friendly verification command docs",
-      "status": "todo",
+      "status": "done",
       "priority": "P2",
       "area": "quality",
       "hardware_required": false,
@@ -343,7 +343,12 @@
       ],
       "blocked_by": [],
       "depends_on": [],
-      "evidence": []
+      "evidence": [
+        "Added docs/verification.md with exact .venv/bin/python pytest command.",
+        "Documented no-hardware dry-run, preview, calibration dry-run, and mock-session smoke commands.",
+        "Documented optional scan extras separately.",
+        "Referenced docs/verification.md from AGENT_HANDOFF.md and verified with .venv/bin/python -m pytest tests/test_verification_docs.py."
+      ]
     },
     {
       "id": "SW-015",
