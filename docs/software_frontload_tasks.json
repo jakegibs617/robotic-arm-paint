@@ -1,0 +1,330 @@
+{
+  "version": 1,
+  "project": "painterbot",
+  "purpose": "Track software tasks that can be completed before physical hardware is ready.",
+  "hardware_status": {
+    "ready_for_testing": false,
+    "note": "Physical arm hardware is not yet ready for live testing. Prioritize mock-mode, fake-serial, config, calibration, preview, diagnostics, and test coverage work.",
+    "last_confirmed": "2026-07-04"
+  },
+  "status_values": [
+    "todo",
+    "in_progress",
+    "blocked",
+    "done",
+    "deferred"
+  ],
+  "priority_values": [
+    "P0",
+    "P1",
+    "P2",
+    "P3"
+  ],
+  "tasks": [
+    {
+      "id": "SW-001",
+      "title": "Add servo bus bring-up CLI scaffold",
+      "status": "done",
+      "priority": "P0",
+      "area": "hardware_bringup",
+      "hardware_required": false,
+      "summary": "Create a mock-safe CLI entrypoint for future STS3215 bring-up workflows.",
+      "acceptance_criteria": [
+        "Adds a script entrypoint such as painterbot-bringup.",
+        "Supports mock/fake-safe commands for listing configured joints and intended servo IDs.",
+        "Does not require real serial hardware to run basic commands.",
+        "Has tests for argument parsing and mock-safe behavior."
+      ],
+      "blocked_by": [],
+      "depends_on": [],
+      "evidence": [
+        "Added painterbot-bringup entrypoint with mock-safe list-joints and protocols commands.",
+        "Added tests/test_bringup_cli.py covering argument parsing and no-serial behavior.",
+        "Verified with .venv/bin/python -m pytest tests/test_bringup_cli.py."
+      ]
+    },
+    {
+      "id": "SW-002",
+      "title": "Design fake STS3215 serial harness",
+      "status": "todo",
+      "priority": "P0",
+      "area": "serial",
+      "hardware_required": false,
+      "summary": "Create a reusable fake serial object that can simulate STS3215 replies, corrupt packets, missing replies, stale acknowledgements, and multiple servo IDs.",
+      "acceptance_criteria": [
+        "Reusable in unit tests outside tests/test_control.py.",
+        "Can serve position replies for multiple IDs.",
+        "Can simulate short reads, checksum errors, wrong IDs, and stale packets.",
+        "Documents which hardware behaviors are simulated versus still unknown."
+      ],
+      "blocked_by": [],
+      "depends_on": [],
+      "evidence": []
+    },
+    {
+      "id": "SW-003",
+      "title": "Add servo ping/read preflight API",
+      "status": "todo",
+      "priority": "P0",
+      "area": "serial",
+      "hardware_required": false,
+      "summary": "Add a small service or function layer for reading configured servos and reporting actionable diagnostics.",
+      "acceptance_criteria": [
+        "Can run against the fake STS3215 harness.",
+        "Reports missing feedback capability clearly.",
+        "Reports no reply, wrong ID, bad checksum, and success separately.",
+        "Does not move servos."
+      ],
+      "blocked_by": [],
+      "depends_on": [
+        "SW-002"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "SW-004",
+      "title": "Create calibration session domain object",
+      "status": "todo",
+      "priority": "P1",
+      "area": "calibration",
+      "hardware_required": false,
+      "summary": "Move required-pose workflow rules out of CLI conditionals into a testable calibration session abstraction.",
+      "acceptance_criteria": [
+        "Knows required poses: home, pen_up, pen_down, corner_bl, corner_br, corner_tl, corner_tr.",
+        "Can capture a current arm pose under a required or custom name.",
+        "Reports missing poses and completion state.",
+        "Validates pose length and safe range consistency.",
+        "Covered by unit tests with mock arm/config objects."
+      ],
+      "blocked_by": [],
+      "depends_on": [],
+      "evidence": []
+    },
+    {
+      "id": "SW-005",
+      "title": "Add guided calibration dry-run command",
+      "status": "todo",
+      "priority": "P1",
+      "area": "calibration",
+      "hardware_required": false,
+      "summary": "Add a non-hardware command path that shows the calibration steps, current completion state, and save target.",
+      "acceptance_criteria": [
+        "Runs without hardware.",
+        "Prints required poses and whether each is present.",
+        "Identifies the workspace config file that would be used.",
+        "Reuses calibration session logic rather than duplicating rules."
+      ],
+      "blocked_by": [],
+      "depends_on": [
+        "SW-004"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "SW-006",
+      "title": "Introduce DrawingPlan preflight object",
+      "status": "todo",
+      "priority": "P1",
+      "area": "drawing",
+      "hardware_required": false,
+      "summary": "Unify dry-run, preview, and execution inputs around a single planned drawing representation.",
+      "acceptance_criteria": [
+        "Stores fitted and resampled strokes.",
+        "Reports stroke count, point count, bounds, and estimated servo command count.",
+        "Can be generated without connecting to an arm.",
+        "Existing draw_shape and draw_svg dry-run outputs remain equivalent or improve.",
+        "Covered by tests for built-in shapes and SVG fixtures."
+      ],
+      "blocked_by": [],
+      "depends_on": [],
+      "evidence": []
+    },
+    {
+      "id": "SW-007",
+      "title": "Add drawing preflight safety checks",
+      "status": "todo",
+      "priority": "P0",
+      "area": "drawing",
+      "hardware_required": false,
+      "summary": "Fail before arm connection or movement when drawing, workspace, or calibration state is invalid.",
+      "acceptance_criteria": [
+        "Detects missing calibration poses with exact missing names.",
+        "Detects paper margin leaving no usable area.",
+        "Detects empty drawings and degenerate path cases.",
+        "Confirms no serial writes occur on preflight failure.",
+        "Covered by tests."
+      ],
+      "blocked_by": [],
+      "depends_on": [
+        "SW-006"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "SW-008",
+      "title": "Expand SVG fixture coverage",
+      "status": "todo",
+      "priority": "P2",
+      "area": "drawing",
+      "hardware_required": false,
+      "summary": "Add representative SVG fixtures that stress lines, curves, multiple strokes, transforms, empty paths, and bounds.",
+      "acceptance_criteria": [
+        "Adds fixtures under tests or examples.",
+        "Covers curves, multiple paths, transforms, and invalid/empty SVG behavior.",
+        "Documents any unsupported SVG features.",
+        "Keeps tests deterministic."
+      ],
+      "blocked_by": [],
+      "depends_on": [],
+      "evidence": []
+    },
+    {
+      "id": "SW-009",
+      "title": "Add preview regression tests",
+      "status": "todo",
+      "priority": "P2",
+      "area": "preview",
+      "hardware_required": false,
+      "summary": "Strengthen PNG preview tests around paper bounds, drawing bounds, empty drawings, and output file creation.",
+      "acceptance_criteria": [
+        "Tests preview output for representative shapes.",
+        "Checks generated image is non-empty.",
+        "Checks paper and drawing bounds are visible or encoded in predictable ways.",
+        "Avoids brittle pixel-perfect assertions unless needed."
+      ],
+      "blocked_by": [],
+      "depends_on": [],
+      "evidence": []
+    },
+    {
+      "id": "SW-010",
+      "title": "Headless calibration UI testability pass",
+      "status": "todo",
+      "priority": "P1",
+      "area": "calibration",
+      "hardware_required": false,
+      "summary": "Separate OpenCV click/UI concerns from homography and persistence logic so calibration can be tested without a display.",
+      "acceptance_criteria": [
+        "Pure functions cover corner ordering, homography generation, and config update behavior.",
+        "OpenCV window code remains thin.",
+        "Tests run headlessly in CI/local terminal.",
+        "Failure messages explain bad corner counts or invalid image paths."
+      ],
+      "blocked_by": [],
+      "depends_on": [],
+      "evidence": []
+    },
+    {
+      "id": "SW-011",
+      "title": "Add config validation for workspace pose shape",
+      "status": "todo",
+      "priority": "P1",
+      "area": "config",
+      "hardware_required": false,
+      "summary": "Prevent malformed calibrated workspace files from reaching drawing execution.",
+      "acceptance_criteria": [
+        "Required poses, when present, must have six numeric angles.",
+        "Errors identify the bad pose name and reason.",
+        "Existing unset default poses remain allowed.",
+        "Tests cover missing, null, too-short, too-long, and nonnumeric poses."
+      ],
+      "blocked_by": [],
+      "depends_on": [],
+      "evidence": []
+    },
+    {
+      "id": "SW-012",
+      "title": "Add mock hardware session transcript command",
+      "status": "todo",
+      "priority": "P2",
+      "area": "docs_tooling",
+      "hardware_required": false,
+      "summary": "Create a command or documented script that demonstrates the planned no-hardware workflow from dry-run to mock execution.",
+      "acceptance_criteria": [
+        "Shows setup, dry-run, preview, mock draw, and expected output.",
+        "Can be run repeatedly without modifying real configs unexpectedly.",
+        "Useful as a future agent handoff verification path."
+      ],
+      "blocked_by": [],
+      "depends_on": [],
+      "evidence": []
+    },
+    {
+      "id": "SW-013",
+      "title": "Document hardware-arrival checklist as machine-trackable data",
+      "status": "todo",
+      "priority": "P2",
+      "area": "docs_tooling",
+      "hardware_required": false,
+      "summary": "Convert the hardware bring-up checklist into JSON or YAML so each physical step can be checked off later.",
+      "acceptance_criteria": [
+        "Represents power, serial port, baud, servo IDs, safe ranges, and calibration poses.",
+        "Clearly marks which items require physical hardware.",
+        "Links back to docs/hardware_identification.md and docs/calibration.md.",
+        "Does not duplicate large prose blocks."
+      ],
+      "blocked_by": [],
+      "depends_on": [],
+      "evidence": []
+    },
+    {
+      "id": "SW-014",
+      "title": "Add CI-friendly verification command docs",
+      "status": "todo",
+      "priority": "P2",
+      "area": "quality",
+      "hardware_required": false,
+      "summary": "Create a concise local verification checklist for future sessions that avoids the pyenv/python alias pitfall.",
+      "acceptance_criteria": [
+        "Documents the exact pytest command using .venv/bin/python.",
+        "Includes dry-run and preview commands that do not require hardware.",
+        "Mentions optional scan extras separately.",
+        "Can be referenced from AGENT_HANDOFF.md."
+      ],
+      "blocked_by": [],
+      "depends_on": [],
+      "evidence": []
+    },
+    {
+      "id": "SW-015",
+      "title": "Prototype scan import summary without execution",
+      "status": "todo",
+      "priority": "P3",
+      "area": "iphone_scan",
+      "hardware_required": false,
+      "summary": "Improve iPhone LiDAR import stubs so scan files can be summarized safely without any robot motion.",
+      "acceptance_criteria": [
+        "Lazy-loads optional scan dependencies.",
+        "Reports mesh/file bounds, units if known, and vertex/face counts.",
+        "Fails gracefully when scan extras are missing.",
+        "Does not introduce any 3D execution path."
+      ],
+      "blocked_by": [],
+      "depends_on": [],
+      "evidence": []
+    }
+  ],
+  "session_log": [
+    {
+      "date": "2026-07-04",
+      "summary": "Created initial software-frontload task tracker. Hardware is not ready; focus is on mock-safe and fake-serial work.",
+      "updated_task_ids": [
+        "SW-001",
+        "SW-002",
+        "SW-003",
+        "SW-004",
+        "SW-005",
+        "SW-006",
+        "SW-007",
+        "SW-008",
+        "SW-009",
+        "SW-010",
+        "SW-011",
+        "SW-012",
+        "SW-013",
+        "SW-014",
+        "SW-015"
+      ]
+    }
+  ]
+}
