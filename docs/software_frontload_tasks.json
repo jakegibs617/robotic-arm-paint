@@ -216,7 +216,7 @@
     {
       "id": "SW-009",
       "title": "Add preview regression tests",
-      "status": "todo",
+      "status": "done",
       "priority": "P2",
       "area": "preview",
       "hardware_required": false,
@@ -229,7 +229,12 @@
       ],
       "blocked_by": [],
       "depends_on": [],
-      "evidence": []
+      "evidence": [
+        "Expanded tests/test_preview.py with nonblank PNG checks for representative shapes and empty drawings.",
+        "Added image-content assertions that paper bounds remain visible and drawing strokes add colored pixels.",
+        "Assertions avoid pixel-perfect comparisons and use broad non-white/colored-pixel thresholds.",
+        "Verified with .venv/bin/python -m pytest tests/test_preview.py."
+      ]
     },
     {
       "id": "SW-010",
