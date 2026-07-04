@@ -116,17 +116,27 @@ def load_arm_config(path: Optional[Path] = None) -> ArmConfig:
     return ArmConfig.model_validate(_load_yaml(path))
 
 
+def resolve_workspace_config_path(path: Optional[Path] = None) -> Path:
+    """Resolve the workspace config path that ``load_workspace_config`` will read."""
+    if path is not None:
+        return path
+    calibrated = CONFIGS_DIR / "workspace.calibrated.yaml"
+    return calibrated if calibrated.exists() else CONFIGS_DIR / "workspace.default.yaml"
+
+
+def default_workspace_save_path(path: Optional[Path] = None) -> Path:
+    """Resolve where captured calibration poses should be saved."""
+    return path or CONFIGS_DIR / "workspace.calibrated.yaml"
+
+
 def load_workspace_config(path: Optional[Path] = None) -> WorkspaceConfig:
     """Load workspace config, preferring the calibrated file if it exists."""
-    if path is None:
-        calibrated = CONFIGS_DIR / "workspace.calibrated.yaml"
-        path = calibrated if calibrated.exists() else CONFIGS_DIR / "workspace.default.yaml"
-    return WorkspaceConfig.model_validate(_load_yaml(path))
+    return WorkspaceConfig.model_validate(_load_yaml(resolve_workspace_config_path(path)))
 
 
 def save_workspace_config(cfg: WorkspaceConfig, path: Optional[Path] = None) -> Path:
     """Persist a workspace config (used to store captured poses)."""
-    path = path or CONFIGS_DIR / "workspace.calibrated.yaml"
+    path = default_workspace_save_path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as f:
         yaml.safe_dump(cfg.model_dump(), f, sort_keys=False)
