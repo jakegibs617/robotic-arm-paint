@@ -16,6 +16,11 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from painterbot.calibration.homography import (
+    PAPER_CORNER_ORDER,
+    compute_homography,
+    validate_image_corners,
+)
 from painterbot.calibration.pose_calibration import CalibrationSession
 from painterbot.config import (
     default_workspace_save_path,
@@ -28,12 +33,9 @@ from painterbot.config import (
 def _click_corners(image_path: Path) -> list[tuple[float, float]]:
     import cv2
 
-    img = cv2.imread(str(image_path))
-    if img is None:
-        raise FileNotFoundError(f"could not read image {image_path}")
+    img = _read_calibration_image(image_path)
 
     corners: list[tuple[float, float]] = []
-    labels = ["bottom-left", "bottom-right", "top-right", "top-left"]
 
     def on_click(event, x, y, flags, param):
         if event == cv2.EVENT_LBUTTONDOWN and len(corners) < 4:
@@ -43,16 +45,44 @@ def _click_corners(image_path: Path) -> list[tuple[float, float]]:
 
     cv2.namedWindow("calibrate")
     cv2.setMouseCallback("calibrate", on_click)
-    print("Click the four paper corners in order: " + ", ".join(labels))
+    print("Click the four paper corners in order: " + ", ".join(PAPER_CORNER_ORDER))
     cv2.imshow("calibrate", img)
     while len(corners) < 4:
         if cv2.waitKey(20) & 0xFF == 27:  # Esc to abort
             break
     cv2.destroyAllWindows()
 
-    if len(corners) != 4:
-        raise RuntimeError("calibration aborted before 4 corners were clicked")
-    return corners
+    return validate_image_corners(corners)
+
+
+def _read_calibration_image(image_path: Path):
+    import cv2
+
+    img = cv2.imread(str(image_path))
+    if img is None:
+        raise FileNotFoundError(f"could not read calibration image {image_path}")
+    return img
+
+
+def build_calibration_payload(ws, image_path: Path, corners: list[tuple[float, float]]):
+    corners = validate_image_corners(corners)
+    h = compute_homography(corners, ws.paper.width_mm, ws.paper.height_mm)
+    payload = ws.model_dump()
+    payload["calibration"] = {
+        "image": str(image_path),
+        "image_corners_px": corners,
+        "homography": h.tolist(),
+    }
+    return payload
+
+
+def save_calibration_payload(payload: dict, out: Path) -> Path:
+    import yaml
+
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with out.open("w", encoding="utf-8") as f:
+        yaml.safe_dump(payload, f, sort_keys=False)
+    return out
 
 
 def main(argv=None) -> int:
@@ -82,26 +112,12 @@ def main(argv=None) -> int:
     if args.image is None:
         parser.error("--image is required unless --dry-run is set")
 
-    from painterbot.calibration.homography import compute_homography
-
     ws = load_workspace_config(args.workspace_config)
     corners = _click_corners(args.image)
-    h = compute_homography(corners, ws.paper.width_mm, ws.paper.height_mm)
 
-    # Persist the workspace config plus the captured homography so drawing can
-    # place artwork on the detected sheet.
-    extra = ws.model_dump()
-    extra["calibration"] = {
-        "image": str(args.image),
-        "image_corners_px": corners,
-        "homography": h.tolist(),
-    }
+    payload = build_calibration_payload(ws, args.image, corners)
     out = default_workspace_save_path(args.workspace_config)
-    import yaml
-
-    out.parent.mkdir(parents=True, exist_ok=True)
-    with out.open("w", encoding="utf-8") as f:
-        yaml.safe_dump(extra, f, sort_keys=False)
+    save_calibration_payload(payload, out)
     print(f"wrote calibration to {out}")
     return 0
 

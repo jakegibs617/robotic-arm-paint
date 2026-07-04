@@ -13,6 +13,30 @@ import numpy as np
 
 # Corners are provided in this order to match iphone.default.yaml.
 Corner = tuple[float, float]
+PAPER_CORNER_ORDER = ("bottom-left", "bottom-right", "top-right", "top-left")
+
+
+def paper_corners_mm(
+    paper_width_mm: float,
+    paper_height_mm: float,
+) -> list[Corner]:
+    """Paper destination corners in BL, BR, TR, TL order."""
+    return [
+        (0.0, 0.0),
+        (paper_width_mm, 0.0),
+        (paper_width_mm, paper_height_mm),
+        (0.0, paper_height_mm),
+    ]
+
+
+def validate_image_corners(image_corners: Sequence[Corner]) -> list[Corner]:
+    """Return four clicked corners or raise with the expected click order."""
+    if len(image_corners) != 4:
+        raise ValueError(
+            "need exactly 4 image corners "
+            f"({', '.join(PAPER_CORNER_ORDER)}), got {len(image_corners)}"
+        )
+    return [(float(x), float(y)) for x, y in image_corners]
 
 
 def compute_homography(
@@ -25,22 +49,11 @@ def compute_homography(
     ``image_corners`` must be four ``(x_px, y_px)`` points clicked in the order
     bottom-left, bottom-right, top-right, top-left.
     """
-    if len(image_corners) != 4:
-        raise ValueError("need exactly 4 image corners (BL, BR, TR, TL)")
-
     import cv2
 
-    src = np.asarray(image_corners, dtype=np.float32)
+    src = np.asarray(validate_image_corners(image_corners), dtype=np.float32)
     # Paper destination corners in mm, same BL, BR, TR, TL order. Paper y is up.
-    dst = np.asarray(
-        [
-            [0.0, 0.0],
-            [paper_width_mm, 0.0],
-            [paper_width_mm, paper_height_mm],
-            [0.0, paper_height_mm],
-        ],
-        dtype=np.float32,
-    )
+    dst = np.asarray(paper_corners_mm(paper_width_mm, paper_height_mm), dtype=np.float32)
     return cv2.getPerspectiveTransform(src, dst)
 
 
