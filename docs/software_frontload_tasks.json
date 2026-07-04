@@ -353,7 +353,7 @@
     {
       "id": "SW-015",
       "title": "Prototype scan import summary without execution",
-      "status": "todo",
+      "status": "done",
       "priority": "P3",
       "area": "iphone_scan",
       "hardware_required": false,
@@ -366,7 +366,12 @@
       ],
       "blocked_by": [],
       "depends_on": [],
-      "evidence": []
+      "evidence": [
+        "Added MeshSummary, summarize_mesh, and summarize_scan for safe scan-file inspection.",
+        "Reports mesh type, bounds, size, units when known, vertex count, face count, and watertight status.",
+        "Optional scan dependencies remain lazy-loaded and CLI missing-extra failures return a graceful message.",
+        "Verified with .venv/bin/python -m pytest tests/test_iphone.py."
+      ]
     }
   ],
   "session_log": [

@@ -7,7 +7,12 @@ the trimesh import, and ``load_image`` fails fast on an unreadable path.
 
 import pytest
 
-from painterbot.iphone.import_scan import ACCEPTED_SUFFIXES, load_mesh
+from painterbot.iphone.import_scan import (
+    ACCEPTED_SUFFIXES,
+    load_mesh,
+    main as scan_main,
+    summarize_mesh,
+)
 
 
 def test_load_mesh_rejects_unsupported_suffix():
@@ -55,3 +60,53 @@ def test_load_image_missing_file_raises(tmp_path):
 
     with pytest.raises(FileNotFoundError):
         load_image(tmp_path / "does_not_exist.jpg")
+
+
+def test_summarize_mesh_reports_counts_bounds_and_units():
+    mesh = type(
+        "FakeMesh",
+        (),
+        {
+            "vertices": [(0, 0, 0), (1, 0, 0), (1, 2, 3)],
+            "faces": [(0, 1, 2)],
+            "bounds": [[0, 0, 0], [1, 2, 3]],
+            "metadata": {"units": "m"},
+            "is_watertight": False,
+        },
+    )()
+
+    summary = summarize_mesh(mesh, "scan.obj")
+
+    assert summary.vertex_count == 3
+    assert summary.face_count == 1
+    assert summary.bounds == [[0.0, 0.0, 0.0], [1.0, 2.0, 3.0]]
+    assert summary.size == [1.0, 2.0, 3.0]
+    assert summary.units == "m"
+    assert "vertices: 3" in "\n".join(summary.lines())
+
+
+def test_summarize_scene_sums_child_counts():
+    child = type("ChildMesh", (), {"vertices": [1, 2], "faces": [1]})()
+    scene = type(
+        "FakeScene",
+        (),
+        {"geometry": {"a": child, "b": child}, "bounds": [[0, 0, 0], [2, 2, 2]]},
+    )()
+
+    summary = summarize_mesh(scene, "scan.glb")
+
+    assert summary.vertex_count == 4
+    assert summary.face_count == 2
+    assert summary.units is None
+
+
+def test_scan_main_missing_optional_deps_fails_gracefully(monkeypatch, capsys):
+    import painterbot.iphone.import_scan as mod
+
+    def fail_load(path):
+        raise RuntimeError("mesh import needs the optional scan deps")
+
+    monkeypatch.setattr(mod, "load_mesh", fail_load)
+
+    assert scan_main(["scan.obj"]) == 2
+    assert "optional scan deps" in capsys.readouterr().out
