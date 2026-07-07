@@ -372,6 +372,31 @@
         "Optional scan dependencies remain lazy-loaded and CLI missing-extra failures return a graceful message.",
         "Verified with .venv/bin/python -m pytest tests/test_iphone.py."
       ]
+    },
+    {
+      "id": "SW-016",
+      "title": "Add STS3215 servo-ID assignment and wire preflight into bringup CLI",
+      "status": "done",
+      "priority": "P0",
+      "area": "hardware_bringup",
+      "hardware_required": false,
+      "summary": "Implement the EEPROM unlock/write-ID/re-lock wire protocol for reassigning an STS3215 servo's bus ID, and wire it plus the existing read-only preflight diagnostics into real apps/bringup.py subcommands.",
+      "acceptance_criteria": [
+        "STS3215 ID (register 0x05) and Lock (register 0x37) framing implemented and byte-level tested, following the existing torque/read-position encoder pattern.",
+        "PySerialBackend.assign_servo_id and MockSerialBackend.assign_servo_id both validate old_id and new_id before writing.",
+        "apps/bringup.py gains `ping` (wires read_servo_preflight into a subcommand that opens a real connection) and `assign-id` (wires the new assignment helper) -- previously no bringup subcommand opened a serial port at all.",
+        "Reviewed by a subagent on the PR; findings addressed before merge.",
+        "Explicitly marked unverified against real hardware, consistent with the rest of the sts3215 protocol."
+      ],
+      "blocked_by": [],
+      "depends_on": [],
+      "evidence": [
+        "Added control/id_assignment.py (assign_servo_id -> IdAssignmentResult) mirroring control/preflight.py's ServoPreflightResult style.",
+        "Added _encode_sts3215_set_id / _encode_sts3215_lock and PySerialBackend/MockSerialBackend.assign_servo_id in control/serial_controller.py.",
+        "Added apps/bringup.py `ping` and `assign-id` subcommands.",
+        "PR #5, reviewed by a subagent (posted to GitHub), which caught a missing old_id range validation (fixed) and an overclaiming success message (reworded to note writes are not read back).",
+        "Verified with .venv/bin/python -m pytest -q (139 passed, up from 124)."
+      ]
     }
   ],
   "session_log": [
@@ -394,6 +419,13 @@
         "SW-013",
         "SW-014",
         "SW-015"
+      ]
+    },
+    {
+      "date": "2026-07-06",
+      "summary": "Closed the last two software-only bring-up gaps: servo-ID assignment protocol and wiring preflight diagnostics into a real bringup CLI subcommand.",
+      "updated_task_ids": [
+        "SW-016"
       ]
     }
   ]
