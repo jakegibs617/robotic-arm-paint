@@ -294,6 +294,8 @@ class MockSerialBackend:
 
     def assign_servo_id(self, old_id: int, new_id: int) -> None:
         """Remap any recorded state from ``old_id`` to ``new_id``."""
+        if not 0 <= old_id <= _STS_MAX_ID:
+            raise ValueError(f"servo id {old_id} out of range 0..{_STS_MAX_ID}")
         if not 0 <= new_id <= _STS_MAX_ID:
             raise ValueError(f"servo id {new_id} out of range 0..{_STS_MAX_ID}")
         if old_id in self.state:
@@ -400,6 +402,11 @@ class PySerialBackend:
                 "assign_servo_id needs a protocol with ID-assignment support "
                 "(e.g. sts3215); the current protocol does not support it"
             )
+        # Both ids are validated up front (not just new_id): _sts_packet masks
+        # servo_id & 0xFF, so an out-of-range old_id would otherwise silently
+        # address a *different* servo on the shared bus instead of raising.
+        if not 0 <= old_id <= _STS_MAX_ID:
+            raise ValueError(f"servo id {old_id} out of range 0..{_STS_MAX_ID}")
         if not 0 <= new_id <= _STS_MAX_ID:
             raise ValueError(f"servo id {new_id} out of range 0..{_STS_MAX_ID}")
         reset = getattr(self._serial, "reset_input_buffer", None)

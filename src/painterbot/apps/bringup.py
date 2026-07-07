@@ -1,8 +1,9 @@
-"""Mock-safe hardware bring-up helpers.
+"""Hardware bring-up helpers.
 
-The commands in this module are intended for pre-hardware and first-power-on
-sessions. They inspect configuration and protocol capabilities without opening a
-serial port unless a future subcommand explicitly opts into that behavior.
+``list-joints``, ``protocols``, and ``mock-session`` inspect configuration and
+protocol capabilities without opening a serial port. ``ping`` and ``assign-id``
+open a real connection (or the mock backend with ``--mock``) to read servo
+positions or reassign a bus ID.
 """
 
 from __future__ import annotations

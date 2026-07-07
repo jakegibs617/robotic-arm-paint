@@ -50,7 +50,9 @@ def test_bringup_assign_id_succeeds_in_mock_mode(capsys):
     assert rc == 0
     out = capsys.readouterr().out
     assert "connect exactly ONE servo" in out
-    assert "[OK] servo 1 reassigned to id 0" in out
+    assert "[OK]" in out
+    assert "servo 1 -> 0" in out
+    assert "verify with `bringup ping`" in out
 
 
 def test_bringup_assign_id_reports_invalid_id_without_raising(capsys):

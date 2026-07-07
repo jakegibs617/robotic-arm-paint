@@ -44,6 +44,9 @@ def assign_servo_id(
 
     Connect exactly one servo before calling this — see the module docstring.
     Never raises: hardware/config problems come back as a non-``ok`` result.
+    ``"success"`` means the three writes were sent without error — none of them
+    are read back, so it is not proof the servo actually applied them. Follow
+    up with a ``ping`` at the new ID before trusting it.
     """
     try:
         backend.assign_servo_id(old_id, new_id)
@@ -56,5 +59,9 @@ def assign_servo_id(
         )
         return IdAssignmentResult(old_id, new_id, status, detail)
     return IdAssignmentResult(
-        old_id, new_id, "success", f"servo {old_id} reassigned to id {new_id}"
+        old_id,
+        new_id,
+        "success",
+        f"sent unlock/write-id/lock for servo {old_id} -> {new_id} "
+        "(not read back; verify with `bringup ping` before trusting it)",
     )

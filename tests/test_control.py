@@ -152,6 +152,21 @@ def test_pyserial_backend_assign_servo_id_rejects_out_of_range_new_id():
     assert fake.written == []  # nothing sent once the new id fails validation
 
 
+def test_pyserial_backend_assign_servo_id_rejects_out_of_range_old_id():
+    # old_id also needs validation: _sts_packet masks servo_id & 0xFF, so an
+    # unchecked bad old_id would silently address a different bus servo.
+    fake = FakeSerial()
+    be = PySerialBackend(
+        "/dev/fake",
+        encoder=get_encoder("sts3215"),
+        feedback=get_feedback("sts3215"),
+        serial_obj=fake,
+    )
+    with pytest.raises(ValueError, match="out of range"):
+        be.assign_servo_id(-1, 5)
+    assert fake.written == []
+
+
 def test_pyserial_backend_assign_servo_id_without_feedback_raises():
     be = PySerialBackend(
         "/dev/fake", encoder=get_encoder("ascii_servo"), serial_obj=FakeSerial()
@@ -177,6 +192,8 @@ def test_mock_backend_assign_servo_id_rejects_out_of_range():
     be = MockSerialBackend()
     with pytest.raises(ValueError, match="out of range"):
         be.assign_servo_id(1, 300)
+    with pytest.raises(ValueError, match="out of range"):
+        be.assign_servo_id(-1, 5)
 
 
 def _sts_position_reply(servo_id: int, pos: int) -> bytes:
