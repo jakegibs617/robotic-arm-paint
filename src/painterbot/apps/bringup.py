@@ -1,0 +1,176 @@
+"""Hardware bring-up helpers.
+
+``list-joints``, ``protocols``, and ``mock-session`` inspect configuration and
+protocol capabilities without opening a serial port. ``ping`` and ``assign-id``
+open a real connection (or the mock backend with ``--mock``) to read servo
+positions or reassign a bus ID.
+"""
+
+from __future__ import annotations
+
+import argparse
+
+from painterbot.apps._common import add_connection_args, load_configs, setup_logging
+from painterbot.control.id_assignment import assign_servo_id
+from painterbot.control.preflight import read_servo_preflight
+from painterbot.control.serial_controller import get_feedback, open_backend
+
+
+def _feedback_text(protocol: str) -> str:
+    return "yes" if get_feedback(protocol) is not None else "no"
+
+
+def _open_raw_backend(args, arm_cfg):
+    """A raw ``SerialBackend`` (not an ``Arm``) for protocol-level bring-up ops."""
+    return open_backend(
+        mock=args.mock,
+        port=args.port or arm_cfg.serial.port,
+        baud=arm_cfg.serial.baud,
+        timeout_s=arm_cfg.serial.timeout_s,
+        protocol=arm_cfg.serial.protocol,
+    )
+
+
+def _print_joint_table(args) -> None:
+    arm_cfg, _ = load_configs(args)
+    protocol = arm_cfg.serial.protocol
+    print(f"protocol: {protocol}")
+    print(f"feedback: {_feedback_text(protocol)}")
+    print("configured servo IDs:")
+    for joint in arm_cfg.joints:
+        print(
+            f"  {joint.channel}: {joint.name} "
+            f"home={joint.home_deg:g}deg "
+            f"safe={joint.min_deg:g}..{joint.max_deg:g}deg"
+        )
+
+
+def _print_protocols() -> None:
+    from painterbot.control.serial_controller import available_protocols
+
+    print("protocols:")
+    for protocol in available_protocols():
+        print(f"  {protocol} feedback={_feedback_text(protocol)}")
+
+
+def _print_ping(args) -> None:
+    arm_cfg, _ = load_configs(args)
+    backend = _open_raw_backend(args, arm_cfg)
+    try:
+        results = read_servo_preflight(backend, [j.channel for j in arm_cfg.joints])
+        for joint, result in zip(arm_cfg.joints, results):
+            marker = "OK" if result.ok else "FAIL"
+            print(f"  {result.servo_id}: {joint.name:12s} [{marker}] {result.detail}")
+        ok_count = sum(r.ok for r in results)
+        print(f"{ok_count}/{len(results)} servos responded")
+    finally:
+        backend.close()
+
+
+def _print_assign_id(args) -> None:
+    arm_cfg, _ = load_configs(args)
+    print("connect exactly ONE servo before running this (docs/hardware_identification.md)")
+    backend = _open_raw_backend(args, arm_cfg)
+    try:
+        result = assign_servo_id(backend, args.old_id, args.new_id)
+        marker = "OK" if result.ok else "FAIL"
+        print(f"[{marker}] {result.detail}")
+    finally:
+        backend.close()
+
+
+def _print_mock_session(args) -> None:
+    preview = args.preview
+    workspace = args.workspace
+    print("mock hardware session transcript:")
+    print("# setup")
+    print(".venv/bin/python -m pip install -e '.[dev]'")
+    print("# inspect calibration state")
+    print("painterbot-calibrate --dry-run")
+    print("# dry-run artwork without connecting to an arm")
+    print(f"painterbot-draw-shape --shape {args.shape} --dry-run")
+    print("# render a preview PNG without moving hardware")
+    print(f"painterbot-draw-shape --shape {args.shape} --preview {preview}")
+    print("# mock execution with a synthetic calibrated workspace")
+    print(
+        f"painterbot-draw-shape --shape {args.shape} --mock "
+        f"--workspace-config {workspace}"
+    )
+    print("expected output:")
+    print("  dry run: stroke and point counts plus estimated servo commands")
+    print(f"  wrote preview to {preview}")
+    print(f"  drew {args.shape}: N stroke(s)")
+    print("notes:")
+    print("  No real serial port is opened when --mock is used.")
+    print("  Use a temp/synthetic workspace file; real configs are not modified.")
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Mock-safe servo bus bring-up inspection tools."
+    )
+    add_connection_args(parser)
+    sub = parser.add_subparsers(dest="command")
+
+    list_parser = sub.add_parser(
+        "list-joints",
+        help="list configured joints and intended servo IDs without connecting",
+    )
+    list_parser.set_defaults(func=_print_joint_table)
+
+    protocols_parser = sub.add_parser(
+        "protocols",
+        help="list known serial protocols and whether they support feedback",
+    )
+    protocols_parser.set_defaults(func=lambda args: _print_protocols())
+
+    ping_parser = sub.add_parser(
+        "ping",
+        help="open a connection and read each configured servo's position",
+    )
+    ping_parser.set_defaults(func=_print_ping)
+
+    assign_id_parser = sub.add_parser(
+        "assign-id",
+        help="reassign one servo's bus ID (EEPROM write) -- one servo at a time",
+    )
+    assign_id_parser.add_argument(
+        "--old-id", type=int, required=True, help="the servo's current bus ID"
+    )
+    assign_id_parser.add_argument(
+        "--new-id", type=int, required=True, help="the bus ID to assign (0..253)"
+    )
+    assign_id_parser.set_defaults(func=_print_assign_id)
+
+    session_parser = sub.add_parser(
+        "mock-session",
+        help="print a repeatable no-hardware workflow transcript",
+    )
+    session_parser.add_argument(
+        "--shape",
+        default="line",
+        choices=("line", "square", "circle", "spiral", "star"),
+    )
+    session_parser.add_argument("--preview", default="out/mock-session.png")
+    session_parser.add_argument(
+        "--workspace",
+        default="out/mock-calibrated-workspace.yaml",
+        help="synthetic calibrated workspace path shown in the transcript",
+    )
+    session_parser.set_defaults(func=_print_mock_session)
+    return parser
+
+
+def main(argv=None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    setup_logging(args.verbose)
+    if args.command is None:
+        args.command = "list-joints"
+        args.func = _print_joint_table
+    args.func(args)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

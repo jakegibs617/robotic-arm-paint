@@ -103,6 +103,99 @@ def test_sts3215_torque_and_read_packets():
     )
 
 
+def test_sts3215_set_id_and_lock_packets():
+    fb = get_feedback("sts3215")
+    assert fb.encode_set_id is not None
+    assert fb.encode_lock is not None
+    # WRITE ID (0x05) = 5 on current id 1.
+    assert fb.encode_set_id(1, 5) == bytes([0xFF, 0xFF, 0x01, 0x04, 0x03, 0x05, 0x05, 0xED])
+    # WRITE Lock (0x37): 0 = unlock (addressed to the old id)...
+    assert fb.encode_lock(1, False) == bytes([0xFF, 0xFF, 0x01, 0x04, 0x03, 0x37, 0x00, 0xC0])
+    # ...1 = re-lock, addressed to the *new* id since the servo already switched.
+    assert fb.encode_lock(5, True) == bytes([0xFF, 0xFF, 0x05, 0x04, 0x03, 0x37, 0x01, 0xBB])
+
+
+def test_sts3215_set_id_rejects_out_of_range():
+    fb = get_feedback("sts3215")
+    with pytest.raises(ValueError, match="out of range"):
+        fb.encode_set_id(1, 254)
+    with pytest.raises(ValueError, match="out of range"):
+        fb.encode_set_id(1, -1)
+
+
+def test_pyserial_backend_assign_servo_id_sequence():
+    fb = get_feedback("sts3215")
+    fake = FakeSerial()
+    be = PySerialBackend(
+        "/dev/fake", encoder=get_encoder("sts3215"), feedback=fb, serial_obj=fake
+    )
+    be.assign_servo_id(1, 5)
+
+    assert fake.written == [
+        fb.encode_lock(1, False),
+        fb.encode_set_id(1, 5),
+        fb.encode_lock(5, True),
+    ]
+    assert fake.input_resets == 3
+
+
+def test_pyserial_backend_assign_servo_id_rejects_out_of_range_new_id():
+    fake = FakeSerial()
+    be = PySerialBackend(
+        "/dev/fake",
+        encoder=get_encoder("sts3215"),
+        feedback=get_feedback("sts3215"),
+        serial_obj=fake,
+    )
+    with pytest.raises(ValueError, match="out of range"):
+        be.assign_servo_id(1, 300)
+    assert fake.written == []  # nothing sent once the new id fails validation
+
+
+def test_pyserial_backend_assign_servo_id_rejects_out_of_range_old_id():
+    # old_id also needs validation: _sts_packet masks servo_id & 0xFF, so an
+    # unchecked bad old_id would silently address a different bus servo.
+    fake = FakeSerial()
+    be = PySerialBackend(
+        "/dev/fake",
+        encoder=get_encoder("sts3215"),
+        feedback=get_feedback("sts3215"),
+        serial_obj=fake,
+    )
+    with pytest.raises(ValueError, match="out of range"):
+        be.assign_servo_id(-1, 5)
+    assert fake.written == []
+
+
+def test_pyserial_backend_assign_servo_id_without_feedback_raises():
+    be = PySerialBackend(
+        "/dev/fake", encoder=get_encoder("ascii_servo"), serial_obj=FakeSerial()
+    )
+    with pytest.raises(RuntimeError, match="write-only"):
+        be.assign_servo_id(1, 5)
+
+
+def test_mock_backend_assign_servo_id_remaps_state():
+    be = MockSerialBackend()
+    be.write_servo(1, 45.0)
+    be.set_torque(1, True)
+
+    be.assign_servo_id(1, 5)
+
+    assert be.read_servo(5) == 45.0
+    assert be.torque == {5: True}
+    assert 1 not in be.state
+    assert 1 not in be.torque
+
+
+def test_mock_backend_assign_servo_id_rejects_out_of_range():
+    be = MockSerialBackend()
+    with pytest.raises(ValueError, match="out of range"):
+        be.assign_servo_id(1, 300)
+    with pytest.raises(ValueError, match="out of range"):
+        be.assign_servo_id(-1, 5)
+
+
 def _sts_position_reply(servo_id: int, pos: int) -> bytes:
     body = [servo_id, 0x04, 0x00, pos & 0xFF, (pos >> 8) & 0xFF]
     return bytes([0xFF, 0xFF, *body, (~sum(body)) & 0xFF])

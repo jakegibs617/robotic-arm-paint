@@ -50,6 +50,8 @@ class SerialBackend(Protocol):
 
     ``read_servo`` and ``set_torque`` need a protocol with feedback support
     (e.g. ``sts3215``); backends without it raise ``RuntimeError``.
+    ``assign_servo_id`` further needs ID-assignment support (``sts3215`` only)
+    and writes persistent EEPROM state, unlike the other transient commands.
     """
 
     def write_servo(self, channel: int, angle: float) -> None: ...
@@ -57,6 +59,8 @@ class SerialBackend(Protocol):
     def read_servo(self, channel: int) -> Optional[float]: ...
 
     def set_torque(self, channel: int, enabled: bool) -> None: ...
+
+    def assign_servo_id(self, old_id: int, new_id: int) -> None: ...
 
     def close(self) -> None: ...
 
@@ -105,11 +109,14 @@ def _encode_lx16a(channel: int, angle: float, *, move_time_ms: int = 0) -> bytes
 
 _STS_INSTR_READ = 0x02
 _STS_INSTR_WRITE = 0x03
+_STS_REG_ID = 0x05  # 5, 1 byte (EEPROM)
+_STS_REG_LOCK = 0x37  # 55, 1 byte (EEPROM write-protect: 0=unlock, 1=lock)
 _STS_REG_TORQUE_ENABLE = 0x28  # 40, 1 byte
 _STS_REG_GOAL_POSITION = 0x2A  # 42, 2 bytes
 _STS_REG_PRESENT_POSITION = 0x38  # 56, 2 bytes
 _STS_COUNTS_PER_REV = 4096
 _STS_POSITION_REPLY_LEN = 8  # FF FF ID LEN ERR POS_LO POS_HI CHK
+_STS_MAX_ID = 253  # 254 is the broadcast ID; 0..253 are assignable
 
 
 def _sts_packet(servo_id: int, instruction: int, params: list[int]) -> bytes:
@@ -135,6 +142,28 @@ def _encode_sts3215_torque(channel: int, enabled: bool) -> bytes:
 def _encode_sts3215_read_position(channel: int) -> bytes:
     """READ 2 bytes at Present_Position."""
     return _sts_packet(channel, _STS_INSTR_READ, [_STS_REG_PRESENT_POSITION, 2])
+
+
+def _encode_sts3215_lock(channel: int, locked: bool) -> bytes:
+    """WRITE Lock — EEPROM (including ID) is write-protected while locked.
+
+    Servos ship locked. Reassigning an ID means unlock -> write ID -> lock; see
+    ``_encode_sts3215_set_id`` for why the *lock* packet must address the new ID.
+    """
+    return _sts_packet(channel, _STS_INSTR_WRITE, [_STS_REG_LOCK, 1 if locked else 0])
+
+
+def _encode_sts3215_set_id(channel: int, new_id: int) -> bytes:
+    """WRITE ID — reassigns the servo's bus ID (EEPROM; must be unlocked first).
+
+    ``channel`` is the servo's *current* ID — the packet is still addressed to
+    it, since the servo only switches to ``new_id`` after processing this
+    write. Any packet sent *after* this one (e.g. the re-lock) must address
+    ``new_id`` instead.
+    """
+    if not 0 <= new_id <= _STS_MAX_ID:
+        raise ValueError(f"servo id {new_id} out of range 0..{_STS_MAX_ID}")
+    return _sts_packet(channel, _STS_INSTR_WRITE, [_STS_REG_ID, new_id & 0xFF])
 
 
 def _parse_sts3215_position_reply(data: bytes, channel: int) -> float:
@@ -163,12 +192,18 @@ def _parse_sts3215_position_reply(data: bytes, channel: int) -> float:
 
 @dataclass(frozen=True)
 class FeedbackProtocol:
-    """Optional read/torque capability for bus servos with encoders."""
+    """Optional read/torque capability for bus servos with encoders.
+
+    ``encode_set_id``/``encode_lock`` are further optional: only protocols that
+    support reassigning a servo's bus ID (currently just ``sts3215``) set them.
+    """
 
     encode_torque: Callable[[int, bool], bytes]
     encode_read_position: Callable[[int], bytes]
     parse_position_reply: Callable[[bytes, int], float]
     reply_length: int
+    encode_set_id: Optional[Callable[[int, int], bytes]] = None
+    encode_lock: Optional[Callable[[int, bool], bytes]] = None
 
 
 # -- protocol registry -------------------------------------------------------
@@ -188,6 +223,8 @@ _FEEDBACK: dict[str, FeedbackProtocol] = {
         encode_read_position=_encode_sts3215_read_position,
         parse_position_reply=_parse_sts3215_position_reply,
         reply_length=_STS_POSITION_REPLY_LEN,
+        encode_set_id=_encode_sts3215_set_id,
+        encode_lock=_encode_sts3215_lock,
     ),
 }
 
@@ -254,6 +291,18 @@ class MockSerialBackend:
     def set_torque(self, channel: int, enabled: bool) -> None:
         self.torque[channel] = enabled
         logger.info("MOCK torque ch=%d %s", channel, "on" if enabled else "off")
+
+    def assign_servo_id(self, old_id: int, new_id: int) -> None:
+        """Remap any recorded state from ``old_id`` to ``new_id``."""
+        if not 0 <= old_id <= _STS_MAX_ID:
+            raise ValueError(f"servo id {old_id} out of range 0..{_STS_MAX_ID}")
+        if not 0 <= new_id <= _STS_MAX_ID:
+            raise ValueError(f"servo id {new_id} out of range 0..{_STS_MAX_ID}")
+        if old_id in self.state:
+            self.state[new_id] = self.state.pop(old_id)
+        if old_id in self.torque:
+            self.torque[new_id] = self.torque.pop(old_id)
+        logger.info("MOCK servo id %d -> %d", old_id, new_id)
 
     def close(self) -> None:
         logger.info("MOCK serial closed (%d commands sent)", len(self.history))
@@ -336,6 +385,45 @@ class PySerialBackend:
         fb = self._require_feedback("set_torque")
         self._serial.write(fb.encode_torque(channel, enabled))
         logger.info("torque ch=%d %s", channel, "on" if enabled else "off")
+
+    def assign_servo_id(self, old_id: int, new_id: int) -> None:
+        """Reassign a servo's bus ID: unlock EEPROM -> write ID -> re-lock.
+
+        Connect exactly **one** servo at a time (see
+        docs/hardware_identification.md) — this addresses raw bus IDs, not
+        config channels, so a second servo already at ``new_id`` would answer
+        too. Unverified against hardware: the register addresses and the
+        unlock-before-write sequence are implemented from the Feetech memory
+        map, not confirmed against a physical STS3215.
+        """
+        fb = self._require_feedback("assign_servo_id")
+        if fb.encode_set_id is None or fb.encode_lock is None:
+            raise RuntimeError(
+                "assign_servo_id needs a protocol with ID-assignment support "
+                "(e.g. sts3215); the current protocol does not support it"
+            )
+        # Both ids are validated up front (not just new_id): _sts_packet masks
+        # servo_id & 0xFF, so an out-of-range old_id would otherwise silently
+        # address a *different* servo on the shared bus instead of raising.
+        if not 0 <= old_id <= _STS_MAX_ID:
+            raise ValueError(f"servo id {old_id} out of range 0..{_STS_MAX_ID}")
+        if not 0 <= new_id <= _STS_MAX_ID:
+            raise ValueError(f"servo id {new_id} out of range 0..{_STS_MAX_ID}")
+        reset = getattr(self._serial, "reset_input_buffer", None)
+        # Each write may draw a status-packet ack; drop it before the next step
+        # so it can't be mistaken for a reply to a later read (see read_servo).
+        self._serial.write(fb.encode_lock(old_id, False))
+        if reset is not None:
+            reset()
+        self._serial.write(fb.encode_set_id(old_id, new_id))
+        if reset is not None:
+            reset()
+        # The servo has already switched IDs, so the re-lock must address
+        # new_id, not old_id.
+        self._serial.write(fb.encode_lock(new_id, True))
+        if reset is not None:
+            reset()
+        logger.info("servo id %d -> %d (EEPROM unlock/write/lock)", old_id, new_id)
 
     def close(self) -> None:
         try:

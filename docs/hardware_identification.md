@@ -41,11 +41,24 @@ family). The Python stack is the controller.
    ~6–8.4V); budget ~1A idle-per-servo headroom, stall is ~2.7A each, so a
    7.4V supply rated ≥5A is comfortable for drawing loads.
 2. **Assign servo IDs**: servos ship as ID 1. Connect **one servo at a time**
-   and assign IDs **0–5 matching the config `channel`** (0=base … 5=gripper).
-   Use Feetech's FD software (Windows) or a short Python script against the
-   bus (ping ID 1, write the ID register, verify).
-3. **Ping each servo** at 1 Mbps and confirm position reads work
-   (`read` in the jog CLI).
+   and assign IDs **0–5 matching the config `channel`** (0=base … 5=gripper)
+   with:
+
+   ```bash
+   .venv/bin/python -m painterbot.apps.bringup assign-id --port /dev/tty.usbserial-XXXX --old-id 1 --new-id 0
+   ```
+
+   This does the EEPROM unlock → write ID → re-lock sequence
+   (`control/id_assignment.py`, `PySerialBackend.assign_servo_id`) —
+   **unverified against hardware** until the first session; Feetech's FD
+   software (Windows) is the fallback if it doesn't work as expected.
+3. **Ping each servo** at 1 Mbps and confirm position reads work:
+
+   ```bash
+   .venv/bin/python -m painterbot.apps.bringup ping --port /dev/tty.usbserial-XXXX
+   ```
+
+   (or `read` in the jog CLI for one servo at a time).
 4. **Centering**: the STS3215 mid position is count 2048 = **180°** — the
    encoder range is 0–360°, so mount horns/brackets with the joint's neutral
    near 180°, and expect to re-center `home_deg` values around 180 rather

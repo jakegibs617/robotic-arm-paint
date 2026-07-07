@@ -17,7 +17,7 @@ from painterbot.apps._common import (
     load_configs,
     setup_logging,
 )
-from painterbot.drawing.path_sampler import fit_to_paper
+from painterbot.drawing.plan import DrawingPlan
 from painterbot.drawing.stroke_planner import StrokePlanner, summarize_drawing
 from painterbot.drawing.svg_loader import load_svg
 
@@ -43,8 +43,8 @@ def main(argv=None) -> int:
 
     arm_cfg, ws_cfg = load_configs(args)
 
-    drawing = load_svg(args.svg)
-    drawing = fit_to_paper(drawing, ws_cfg.paper)
+    plan = DrawingPlan.from_drawing(load_svg(args.svg), ws_cfg)
+    drawing = plan.fitted_strokes
 
     if args.dry_run:
         print(summarize_drawing(ws_cfg, drawing))
@@ -57,6 +57,7 @@ def main(argv=None) -> int:
         print(f"wrote preview to {out} ({len(drawing)} stroke(s))")
         return 0
 
+    plan.validate_for_execution(ws_cfg)
     arm = connect(args, arm_cfg)
     try:
         planner = StrokePlanner(arm, ws_cfg)

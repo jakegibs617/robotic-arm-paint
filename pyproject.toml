@@ -30,6 +30,7 @@ painterbot-jog = "painterbot.apps.manual_jog:main"
 painterbot-draw-shape = "painterbot.apps.draw_shape:main"
 painterbot-draw-svg = "painterbot.apps.draw_svg:main"
 painterbot-calibrate = "painterbot.apps.calibrate_workspace:main"
+painterbot-bringup = "painterbot.apps.bringup:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -1,0 +1,77 @@
+"""Bring-up CLI tests: config inspection without serial hardware."""
+
+from __future__ import annotations
+
+from painterbot.apps import bringup
+
+
+def test_bringup_lists_configured_servo_ids_without_connection(capsys, monkeypatch):
+    def fail_connect(*args, **kwargs):
+        raise AssertionError("bring-up list must not connect to serial")
+
+    monkeypatch.setattr("painterbot.control.arm.Arm.connect", fail_connect)
+    rc = bringup.main(["list-joints"])
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "protocol: mock" in out
+    assert "feedback: no" in out
+    assert "configured servo IDs:" in out
+    assert "0: base" in out
+    assert "5: gripper" in out
+
+
+def test_bringup_defaults_to_list_joints(capsys):
+    assert bringup.main([]) == 0
+    out = capsys.readouterr().out
+    assert "configured servo IDs:" in out
+
+
+def test_bringup_protocols_reports_feedback_support(capsys):
+    assert bringup.main(["protocols"]) == 0
+    out = capsys.readouterr().out
+    assert "mock feedback=no" in out
+    assert "ascii_servo feedback=no" in out
+    assert "sts3215 feedback=yes" in out
+
+
+def test_bringup_ping_reads_configured_servos_in_mock_mode(capsys):
+    rc = bringup.main(["--mock", "ping"])
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "0: base" in out
+    assert "servos responded" in out
+
+
+def test_bringup_assign_id_succeeds_in_mock_mode(capsys):
+    rc = bringup.main(["--mock", "assign-id", "--old-id", "1", "--new-id", "0"])
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "connect exactly ONE servo" in out
+    assert "[OK]" in out
+    assert "servo 1 -> 0" in out
+    assert "verify with `bringup ping`" in out
+
+
+def test_bringup_assign_id_reports_invalid_id_without_raising(capsys):
+    rc = bringup.main(["--mock", "assign-id", "--old-id", "1", "--new-id", "9001"])
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "[FAIL]" in out
+    assert "out of range" in out
+
+
+def test_bringup_mock_session_prints_no_hardware_workflow(capsys):
+    assert bringup.main(["mock-session", "--shape", "square"]) == 0
+
+    out = capsys.readouterr().out
+    assert "mock hardware session transcript:" in out
+    assert "painterbot-calibrate --dry-run" in out
+    assert "painterbot-draw-shape --shape square --dry-run" in out
+    assert "painterbot-draw-shape --shape square --preview out/mock-session.png" in out
+    assert "--mock --workspace-config out/mock-calibrated-workspace.yaml" in out
+    assert "expected output:" in out
+    assert "real configs are not modified" in out
