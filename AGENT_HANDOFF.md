@@ -27,7 +27,54 @@ and Setup gotcha below). Homography (`tests/test_calibration.py`), preview
 (`tests/test_preview.py`), the iphone stubs (`tests/test_iphone.py`), the
 `--dry-run` summary (`tests/test_dry_run.py`), the sts3215 framing/feedback path
 (`tests/test_control.py`), and servo-ID (re)assignment (`tests/test_id_assignment.py`)
-all have coverage — 138 tests pass as of this writing (`.venv/bin/python -m pytest -q`).
+all have coverage — 139 tests pass as of this writing (`.venv/bin/python -m pytest -q`).
+
+## Latest completed milestone: SW-016 — servo-ID assignment + bringup wiring
+
+- **PR**: [#5](https://github.com/jakegibs617/robotic-arm-paint/pull/5) (merged
+  into `main` at `650cd5d`).
+- **What it did**: implemented the STS3215 EEPROM unlock/write-ID/re-lock wire
+  protocol for reassigning a servo's bus ID (`control/serial_controller.py`,
+  `control/id_assignment.py`), and wired both that and the already-existing
+  `read_servo_preflight` into two new `apps/bringup.py` subcommands (`ping`,
+  `assign-id`) — previously `bringup.py` had no subcommand that opened a real
+  serial connection at all. This closed out the last two software-only,
+  hardware-independent gaps identified before the project needs a physical
+  servo to make further progress (see the hill chart below).
+- **Tests run**: `.venv/bin/python -m pytest -q` — 139 passed (up from 124
+  before this milestone). Focused: `tests/test_control.py`,
+  `tests/test_id_assignment.py`, `tests/test_bringup_cli.py`. Manual smoke:
+  `bringup --mock ping` and `bringup --mock assign-id --old-id 1 --new-id 0`.
+- **Review**: a subagent reviewed PR #5 and posted findings on GitHub
+  ([review comment](https://github.com/jakegibs617/robotic-arm-paint/pull/5),
+  [fix-up comment](https://github.com/jakegibs617/robotic-arm-paint/pull/5#issuecomment-4899358744)).
+  Fixed: `old_id` wasn't range-validated (only `new_id` was) — since
+  `_sts_packet` masks `servo_id & 0xFF`, a bad `old_id` would have silently
+  addressed a different bus servo instead of raising; the CLI's success message
+  overclaimed (none of the three writes are read back, so it now says "sent
+  ... not read back; verify with `bringup ping`" instead of asserting success);
+  a stale docstring in `bringup.py` was corrected.
+- **Known limitations**: the entire ID-assignment sequence is **unverified
+  against real hardware** — implemented from the Feetech memory map only, same
+  caveat as the rest of the `sts3215` protocol. `assign_servo_id` does not read
+  back any of its three writes, so a CLI "success" only means the writes were
+  sent without a Python exception, not that the servo applied them — always
+  follow it with `bringup ping` before trusting a new ID.
+- **Copy/paste prompt for the next session**:
+
+  ```text
+  Read AGENT_HANDOFF.md first. Software-only work is exhausted for now (see
+  the hill chart's "Downhill — known" / "software-only" sections) except
+  optional richer SVG fixtures. The real next milestone is the first physical
+  hardware session per docs/hardware_identification.md: find the serial port,
+  run `bringup assign-id` one servo at a time (unverified — watch for it not
+  working as expected and be ready to fall back to Feetech's FD software),
+  confirm with `bringup ping`, then measure safe ranges and capture the 7
+  calibration poses per docs/calibration.md. If hardware still isn't
+  available, treat the software backlog as done and say so rather than
+  inventing new speculative work — check docs/software_frontload_tasks.json
+  first.
+  ```
 
 ## How to orient yourself (do this first)
 
