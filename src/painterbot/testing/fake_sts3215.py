@@ -10,6 +10,10 @@ Still unknown until hardware arrives:
 * Exact timing around servo status packets and write acknowledgements.
 * Real error-flag combinations under low voltage, overload, or overheating.
 * Whether factory configuration returns extra status bytes for some operations.
+* Whether the EEPROM unlock/write-ID/re-lock sequence in
+  ``PySerialBackend.assign_servo_id`` behaves as the memory map implies —
+  this fake does not simulate EEPROM writes or the ack a real servo sends
+  back for them.
 """
 
 from __future__ import annotations

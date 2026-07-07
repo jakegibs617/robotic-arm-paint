@@ -10,11 +10,24 @@ from __future__ import annotations
 import argparse
 
 from painterbot.apps._common import add_connection_args, load_configs, setup_logging
-from painterbot.control.serial_controller import get_feedback
+from painterbot.control.id_assignment import assign_servo_id
+from painterbot.control.preflight import read_servo_preflight
+from painterbot.control.serial_controller import get_feedback, open_backend
 
 
 def _feedback_text(protocol: str) -> str:
     return "yes" if get_feedback(protocol) is not None else "no"
+
+
+def _open_raw_backend(args, arm_cfg):
+    """A raw ``SerialBackend`` (not an ``Arm``) for protocol-level bring-up ops."""
+    return open_backend(
+        mock=args.mock,
+        port=args.port or arm_cfg.serial.port,
+        baud=arm_cfg.serial.baud,
+        timeout_s=arm_cfg.serial.timeout_s,
+        protocol=arm_cfg.serial.protocol,
+    )
 
 
 def _print_joint_table(args) -> None:
@@ -37,6 +50,32 @@ def _print_protocols() -> None:
     print("protocols:")
     for protocol in available_protocols():
         print(f"  {protocol} feedback={_feedback_text(protocol)}")
+
+
+def _print_ping(args) -> None:
+    arm_cfg, _ = load_configs(args)
+    backend = _open_raw_backend(args, arm_cfg)
+    try:
+        results = read_servo_preflight(backend, [j.channel for j in arm_cfg.joints])
+        for joint, result in zip(arm_cfg.joints, results):
+            marker = "OK" if result.ok else "FAIL"
+            print(f"  {result.servo_id}: {joint.name:12s} [{marker}] {result.detail}")
+        ok_count = sum(r.ok for r in results)
+        print(f"{ok_count}/{len(results)} servos responded")
+    finally:
+        backend.close()
+
+
+def _print_assign_id(args) -> None:
+    arm_cfg, _ = load_configs(args)
+    print("connect exactly ONE servo before running this (docs/hardware_identification.md)")
+    backend = _open_raw_backend(args, arm_cfg)
+    try:
+        result = assign_servo_id(backend, args.old_id, args.new_id)
+        marker = "OK" if result.ok else "FAIL"
+        print(f"[{marker}] {result.detail}")
+    finally:
+        backend.close()
 
 
 def _print_mock_session(args) -> None:
@@ -83,6 +122,24 @@ def build_parser() -> argparse.ArgumentParser:
         help="list known serial protocols and whether they support feedback",
     )
     protocols_parser.set_defaults(func=lambda args: _print_protocols())
+
+    ping_parser = sub.add_parser(
+        "ping",
+        help="open a connection and read each configured servo's position",
+    )
+    ping_parser.set_defaults(func=_print_ping)
+
+    assign_id_parser = sub.add_parser(
+        "assign-id",
+        help="reassign one servo's bus ID (EEPROM write) -- one servo at a time",
+    )
+    assign_id_parser.add_argument(
+        "--old-id", type=int, required=True, help="the servo's current bus ID"
+    )
+    assign_id_parser.add_argument(
+        "--new-id", type=int, required=True, help="the bus ID to assign (0..253)"
+    )
+    assign_id_parser.set_defaults(func=_print_assign_id)
 
     session_parser = sub.add_parser(
         "mock-session",

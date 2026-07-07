@@ -35,6 +35,33 @@ def test_bringup_protocols_reports_feedback_support(capsys):
     assert "sts3215 feedback=yes" in out
 
 
+def test_bringup_ping_reads_configured_servos_in_mock_mode(capsys):
+    rc = bringup.main(["--mock", "ping"])
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "0: base" in out
+    assert "servos responded" in out
+
+
+def test_bringup_assign_id_succeeds_in_mock_mode(capsys):
+    rc = bringup.main(["--mock", "assign-id", "--old-id", "1", "--new-id", "0"])
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "connect exactly ONE servo" in out
+    assert "[OK] servo 1 reassigned to id 0" in out
+
+
+def test_bringup_assign_id_reports_invalid_id_without_raising(capsys):
+    rc = bringup.main(["--mock", "assign-id", "--old-id", "1", "--new-id", "9001"])
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "[FAIL]" in out
+    assert "out of range" in out
+
+
 def test_bringup_mock_session_prints_no_hardware_workflow(capsys):
     assert bringup.main(["mock-session", "--shape", "square"]) == 0
 
