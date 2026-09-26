@@ -59,9 +59,11 @@ def test_nudge_reads_energises_commands_reads_back_then_releases():
         (READ, POSITION),
         (WRITE, GOAL),  # neutralise the stale goal BEFORE energising
         (WRITE, TORQUE),
-        (WRITE, GOAL),
+        (WRITE, GOAL),  # the actual commanded move
         (READ, POSITION),
+        (WRITE, GOAL),  # leave the goal where the servo ended up
         (WRITE, TORQUE),
+        (READ, TORQUE),  # confirm the release rather than assuming it
     ]
 
 
@@ -185,7 +187,9 @@ def test_nudge_releases_torque_when_the_end_read_fails():
 
     assert result.status == "no_end_position"
     assert result.torque_released
-    assert _steps(fake)[-1] == (WRITE, TORQUE)
+    # Last write is the torque release; the final step reads it back.
+    assert [step for step in _steps(fake) if step[0] == WRITE][-1] == (WRITE, TORQUE)
+    assert _steps(fake)[-1] == (READ, TORQUE)
     assert fake.servos[1].torque_enabled is False
 
 
@@ -234,3 +238,121 @@ def test_nudge_tolerates_a_servo_that_acks_every_write():
     assert result.status == "success"
     assert result.start_counts == 2000
     assert result.end_counts == 2100
+
+
+class _RaisingBus:
+    """A bus whose very first read explodes the way a yanked adapter does."""
+
+    def __init__(self, exc):
+        self.exc = exc
+        self.torque_calls = []
+
+    def ping(self, servo_id):
+        raise self.exc
+
+    def read_register(self, servo_id, address, length):
+        raise self.exc
+
+    def write_register(self, servo_id, address, length, value):
+        raise self.exc
+
+    def set_torque(self, channel, enabled):
+        self.torque_calls.append(enabled)
+
+
+def test_nudge_never_raises_even_when_the_first_read_explodes():
+    # The module documents "nothing raises". The start read sat outside the
+    # guarded region, and read_register only swallows RuntimeError -- an
+    # unplugged adapter raises OSError, which isn't one.
+    result = nudge_servo(
+        _RaisingBus(OSError("device not configured")), 1, delta_counts=0,
+        sleep=_never_sleep,
+    )
+
+    assert result.status == "error"
+    assert "device not configured" in result.detail
+    assert result.start_counts is None
+
+
+def test_nudge_never_raises_on_an_echoing_link():
+    from painterbot.control.serial_controller import ServoEchoError
+
+    result = nudge_servo(
+        _RaisingBus(ServoEchoError("servo 1: reply is an echo")), 1,
+        delta_counts=0, sleep=_never_sleep,
+    )
+
+    assert result.status == "error"
+    assert "echo" in result.detail
+
+
+def test_nudge_does_not_report_success_when_torque_release_failed():
+    """A failed release is the most serious outcome this function has. It must
+    dominate the status, or a scripted checklist step passes while the servo is
+    possibly still energised."""
+
+    class ReleaseFails:
+        def __init__(self):
+            self.inner = _bus(FakeSTS3215Serial({1: SimulatedServo(position_counts=2000)}))
+
+        def ping(self, servo_id):
+            return self.inner.ping(servo_id)
+
+        def read_register(self, servo_id, address, length):
+            return self.inner.read_register(servo_id, address, length)
+
+        def write_register(self, servo_id, address, length, value):
+            if int(address) == TORQUE and value == 0:
+                raise OSError("port went away")
+            self.inner.write_register(servo_id, address, length, value)
+
+        def set_torque(self, channel, enabled):
+            if not enabled:
+                raise OSError("port went away")
+            self.inner.set_torque(channel, enabled)
+
+    result = nudge_servo(ReleaseFails(), 1, delta_counts=50, sleep=_never_sleep)
+
+    assert not result.torque_released
+    assert result.status == "torque_not_released"
+    assert not result.ok
+    # And it must not blame the power supply for a dead port.
+    assert "7.4V" not in result.detail
+
+
+def test_nudge_leaves_the_goal_matching_where_the_servo_ended_up():
+    """Otherwise the probe recreates the very hazard it was written to avoid:
+    the next thing to enable torque on this servo inherits a live goal and
+    lurches to it."""
+    fake = FakeSTS3215Serial({1: SimulatedServo(position_counts=2000)})
+
+    result = nudge_servo(_bus(fake), 1, delta_counts=100, sleep=_never_sleep)
+
+    assert result.end_counts == 2100
+    assert fake.servos[1].goal_counts == 2100
+    assert fake.servos[1].torque_enabled is False
+
+
+def test_nudge_confirms_torque_release_by_reading_it_back():
+    """`torque_released` used to mean only "the release bytes reached the OS".
+    The servo acks writes, so reading the register back is cheap and honest."""
+
+    class ReleaseSilentlyIgnored:
+        def __init__(self):
+            self.inner = _bus(FakeSTS3215Serial({1: SimulatedServo(position_counts=2000)}))
+
+        def ping(self, servo_id):
+            return self.inner.ping(servo_id)
+
+        def read_register(self, servo_id, address, length):
+            if int(address) == TORQUE:
+                return 1          # servo insists it is still energised
+            return self.inner.read_register(servo_id, address, length)
+
+        def write_register(self, servo_id, address, length, value):
+            self.inner.write_register(servo_id, address, length, value)
+
+    result = nudge_servo(ReleaseSilentlyIgnored(), 1, delta_counts=50, sleep=_never_sleep)
+
+    assert not result.torque_released
+    assert result.status == "torque_not_released"

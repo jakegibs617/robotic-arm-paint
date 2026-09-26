@@ -68,11 +68,18 @@ def add_connection_args(parser: argparse.ArgumentParser) -> None:
 def resolve_serial(args, arm_cfg: ArmConfig):
     """The serial settings actually in force: CLI flags win over the config."""
     serial_cfg = arm_cfg.serial
+
+    def chosen(name: str, fallback):
+        # `is not None`, not `or`: a flag the user passed explicitly must win
+        # even when its value is falsy (--probe-timeout 0 is valid pyserial).
+        value = getattr(args, name, None)
+        return fallback if value is None else value
+
     return serial_cfg.model_copy(
         update={
-            "port": args.port or serial_cfg.port,
-            "baud": getattr(args, "baud", None) or serial_cfg.baud,
-            "protocol": getattr(args, "protocol", None) or serial_cfg.protocol,
+            "port": chosen("port", serial_cfg.port),
+            "baud": chosen("baud", serial_cfg.baud),
+            "protocol": chosen("protocol", serial_cfg.protocol),
         }
     )
 

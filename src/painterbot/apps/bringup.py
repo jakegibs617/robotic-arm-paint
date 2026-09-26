@@ -26,6 +26,7 @@ from painterbot.apps._common import (
 from painterbot.control import serial_link
 from painterbot.control.bus_scan import (
     DEFAULT_BAUDS,
+    check_servo_id,
     identify_servo,
     scan_bus,
     servo_ids_from_spec,
@@ -36,6 +37,7 @@ from painterbot.control.motion_probe import DEFAULT_NUDGE_COUNTS, nudge_servo
 from painterbot.control.preflight import read_servo_preflight
 from painterbot.control.serial_controller import (
     PySerialBackend,
+    ServoEchoError,
     get_encoder,
     get_feedback,
     open_backend,
@@ -86,20 +88,29 @@ def _simulated_bus(*, empty: bool):
 def _open_probe_bus(args, arm_cfg, *, baud=None, timeout_s=None):
     """A register-level bus for the probing subcommands, plus what it connected to."""
     if args.mock:
-        serial_cfg = resolve_serial(args, arm_cfg).model_copy(
+        resolved = resolve_serial(args, arm_cfg)
+        serial_cfg = resolved.model_copy(
             update={
                 "protocol": _PROBE_PROTOCOL,
                 "port": "mock://fake-servo-bus",
-                "baud": baud or resolve_serial(args, arm_cfg).baud,
-                "timeout_s": timeout_s or _PROBE_TIMEOUT_S,
+                "baud": baud if baud is not None else resolved.baud,
+                "timeout_s": _PROBE_TIMEOUT_S if timeout_s is None else timeout_s,
             }
         )
         return _simulated_bus(empty=args.mock_empty_bus), serial_cfg
 
-    serial_cfg = resolve_serial(args, arm_cfg).model_copy(
+    resolved = resolve_serial(args, arm_cfg)
+    if resolved.protocol == "mock":
+        raise _UsageError(
+            "this command speaks to a servo over the wire, but the serial "
+            f"protocol is 'mock' (port={resolved.port}). Pass --protocol "
+            "sts3215 --port /dev/cu.usbmodem* (see `bringup ports`), or use "
+            "--mock to run against the in-memory fake servo bus."
+        )
+    serial_cfg = resolved.model_copy(
         update={
-            "baud": baud or resolve_serial(args, arm_cfg).baud,
-            "timeout_s": timeout_s or _PROBE_TIMEOUT_S,
+            "baud": baud if baud is not None else resolved.baud,
+            "timeout_s": _PROBE_TIMEOUT_S if timeout_s is None else timeout_s,
         }
     )
     bus = open_backend(
@@ -118,6 +129,33 @@ def _print_connection(serial_cfg, *, mock: bool) -> None:
         f"connecting: port={serial_cfg.port} baud={serial_cfg.baud} "
         f"protocol={serial_cfg.protocol} timeout={serial_cfg.timeout_s}s{note}"
     )
+
+
+class _UsageError(Exception):
+    """A mistake in how the command was invoked -- report it, don't traceback."""
+
+
+def _guard(handler):
+    """Turn the two failures an operator can actually act on into exit codes.
+
+    A usage mistake exits 2; an echoing link exits 1 with its diagnosis. Both
+    used to reach the terminal as a traceback.
+    """
+
+    def run(args) -> int:
+        try:
+            return handler(args)
+        except _UsageError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        except ValueError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        except ServoEchoError as exc:
+            print(f"  {exc}")
+            return 1
+
+    return run
 
 
 def _resolve_ids(spec):
@@ -167,6 +205,7 @@ def _print_scan(args) -> int:
 
 
 def _print_identify(args) -> int:
+    check_servo_id(args.id)
     arm_cfg, _ = load_configs(args)
     bus, serial_cfg = _open_probe_bus(args, arm_cfg, timeout_s=args.probe_timeout)
     _print_connection(serial_cfg, mock=args.mock)
@@ -185,6 +224,7 @@ def _print_identify(args) -> int:
 
 
 def _print_nudge(args) -> int:
+    check_servo_id(args.id)
     arm_cfg, _ = load_configs(args)
     bus, serial_cfg = _open_probe_bus(args, arm_cfg, timeout_s=args.probe_timeout)
     _print_connection(serial_cfg, mock=args.mock)
@@ -236,6 +276,11 @@ def _print_ping(args) -> None:
             print(f"  {result.servo_id}: {joint.name:12s} [{marker}] {result.detail}")
         ok_count = sum(r.ok for r in results)
         print(f"{ok_count}/{len(results)} servos responded")
+        # Non-zero on a real bus so the powered checklist is scriptable, like
+        # scan/identify/nudge. Under --mock there is no hardware to judge: the
+        # mock backend reports None for any servo never commanded, which is a
+        # property of the mock rather than a fault.
+        return 0 if args.mock or ok_count == len(results) else 1
     finally:
         backend.close()
 
@@ -349,7 +394,7 @@ def build_parser() -> argparse.ArgumentParser:
             "the full timeout, so 254 IDs takes about 254x this"
         ),
     )
-    scan_parser.set_defaults(func=_print_scan)
+    scan_parser.set_defaults(func=_guard(_print_scan))
 
     identify_parser = sub.add_parser(
         "identify",
@@ -359,7 +404,7 @@ def build_parser() -> argparse.ArgumentParser:
     identify_parser.add_argument(
         "--probe-timeout", type=float, default=_PROBE_TIMEOUT_S, help=argparse.SUPPRESS
     )
-    identify_parser.set_defaults(func=_print_identify)
+    identify_parser.set_defaults(func=_guard(_print_identify))
 
     nudge_parser = sub.add_parser(
         "nudge",
@@ -386,7 +431,7 @@ def build_parser() -> argparse.ArgumentParser:
     nudge_parser.add_argument(
         "--probe-timeout", type=float, default=_PROBE_TIMEOUT_S, help=argparse.SUPPRESS
     )
-    nudge_parser.set_defaults(func=_print_nudge)
+    nudge_parser.set_defaults(func=_guard(_print_nudge))
 
     session_parser = sub.add_parser(
         "mock-session",

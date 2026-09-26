@@ -60,7 +60,7 @@ from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from typing import Deque, Literal, Union
 
-from painterbot.control.serial_controller import ServoRegister
+from painterbot.control.serial_controller import COUNTS_PER_REV, ServoRegister
 
 FaultKind = Literal["short", "bad_checksum", "wrong_id", "no_reply", "garbage"]
 
@@ -68,7 +68,7 @@ _HEADER = b"\xff\xff"
 _INSTR_PING = 0x01
 _INSTR_READ = 0x02
 _INSTR_WRITE = 0x03
-_COUNTS_PER_REV = 4096
+_COUNTS_PER_REV = COUNTS_PER_REV
 _GARBAGE = bytes([0x7F, 0x00, 0xFE, 0x81, 0x03, 0xC0, 0x55, 0xAA])
 
 
@@ -266,14 +266,6 @@ class FakeSTS3215Serial:
 
     # -- test-facing state ---------------------------------------------------
 
-    @property
-    def positions(self) -> dict[int, float]:
-        """Present positions in degrees, for tests written against the old API."""
-        return {
-            servo_id: servo.position_counts * 360.0 / _COUNTS_PER_REV
-            for servo_id, servo in self.servos.items()
-        }
-
     def set_position(self, servo_id: int, angle: float) -> None:
         counts = position_to_counts(angle)
         servo = self.servos.get(servo_id)
@@ -355,8 +347,9 @@ class FakeSTS3215Serial:
     def _apply_faults(self, servo_id: int, instruction: int, packet: bytes) -> bytes:
         fault = None
         for key in ((servo_id, instruction), (servo_id, None)):
-            if self._faults[key]:
-                fault = self._faults[key].popleft()
+            queued = self._faults.get(key)  # .get, so a scan does not insert
+            if queued:                       # an empty deque per ID probed
+                fault = queued.popleft()
                 break
         if fault is None:
             return packet

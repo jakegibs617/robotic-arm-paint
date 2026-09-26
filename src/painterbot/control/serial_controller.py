@@ -107,12 +107,15 @@ class ServoProbe(Protocol):
 
 
 class RegisterBus(ServoProbe, Protocol):
-    """A ``ServoProbe`` that can also write -- what a motion probe needs."""
+    """A ``ServoProbe`` that can also write -- what a motion probe needs.
+
+    Deliberately only the two operations the wire has. Torque enable is not a
+    separate concept here, it is ``write_register(TORQUE_ENABLE, ...)``; keeping
+    ``set_torque`` would also drag the ``Servo``/``Arm`` word "channel" into a
+    raw-bus role that speaks in servo IDs.
+    """
 
     def write_register(self, servo_id: int, address: int, length: int, value: int) -> None:
-        ...
-
-    def set_torque(self, channel: int, enabled: bool) -> None:
         ...
 
 
@@ -183,10 +186,19 @@ class ServoRegister(IntEnum):
     PRESENT_TEMPERATURE = 0x3F  # 63, 1 byte, degrees C
 
 
-_STS_COUNTS_PER_REV = 4096
+#: Encoder resolution: 4096 counts per full turn, so the centre count 2048 is
+#: 180 degrees. Public because it is the scale the position registers are
+#: measured in, and callers outside this module decode those registers.
+COUNTS_PER_REV = 4096
+
+#: 254 addresses every servo at once; on a half-duplex bus the replies collide.
+BROADCAST_ID = 254
+MAX_SERVO_ID = 253
+
+_STS_COUNTS_PER_REV = COUNTS_PER_REV
 _STS_STATUS_LEN = 6  # FF FF ID LEN ERR CHK -- a bare acknowledgement
 _STS_POSITION_REPLY_LEN = 8  # FF FF ID LEN ERR POS_LO POS_HI CHK
-_STS_MAX_ID = 253  # 254 is the broadcast ID; 0..253 are assignable
+_STS_MAX_ID = MAX_SERVO_ID
 
 
 def _sts_packet(servo_id: int, instruction: int, params: list[int]) -> bytes:
@@ -324,8 +336,13 @@ class RegisterAccess:
     encode_write: Callable[[int, int, int, int], bytes]
     parse_read_reply: Callable[[bytes, int, int], int]
     parse_status: Callable[[bytes, int], int]
+    #: Bytes in a bare acknowledgement. A read reply is this plus the value
+    #: width -- computed at the call site rather than stored, so the two cannot
+    #: drift apart.
     status_length: int
-    read_reply_length: Callable[[int], int]
+
+    def read_reply_length(self, value_length: int) -> int:
+        return self.status_length + value_length
 
 
 _STS3215_REGISTERS = RegisterAccess(
@@ -335,7 +352,6 @@ _STS3215_REGISTERS = RegisterAccess(
     parse_read_reply=_parse_sts3215_read_reply,
     parse_status=_parse_sts3215_status,
     status_length=_STS_STATUS_LEN,
-    read_reply_length=_sts_read_reply_length,
 )
 
 
@@ -483,6 +499,9 @@ class PySerialBackend:
     ) -> None:
         self._encode: ProtocolEncoder = encoder or _encode_ascii_servo
         self._feedback = feedback
+        #: Tri-state: None = not yet determined, True/False = settled for this
+        #: port. Echo is a wiring property, so it is decided once, not per packet.
+        self._link_echoes: Optional[bool] = None
         if serial_obj is not None:
             self._serial = serial_obj
             logger.info("Using injected serial object for %s", port)
@@ -547,20 +566,69 @@ class PySerialBackend:
             )
         return fb.registers
 
-    @staticmethod
-    def _reject_echo(request: bytes, reply: bytes, servo_id: int) -> None:
-        # Exact equality only. A *truncated* genuine reply shares the request's
-        # first bytes (both frames start FF FF ID LEN with the same LEN), so a
-        # prefix match would misread a short read as an echo. An adapter that
-        # loops TX into RX returns the whole request, so exact equality is both
-        # sufficient and free of that false positive.
-        if reply and reply == request:
-            raise ServoEchoError(
-                f"servo {servo_id}: reply is an echo of our own request "
-                f"({reply.hex(' ')}) -- the adapter is looping TX into RX. Check "
-                "the FE-URT-2 wiring and logic-level switch before trusting any "
-                "reading; an echo can decode as a plausible but fictional angle"
+    #: Number of register bytes read by the echo disambiguation probe. Any value
+    #: other than 2 makes the expected reply a different length from the 8-byte
+    #: request; 4 makes it *longer* (10 bytes), which an echo can never fill.
+    _ECHO_PROBE_LEN = 4
+
+    def _reject_echo(self, request: bytes, reply: bytes, servo_id: int) -> None:
+        """Raise if the link is echoing our own request back at us.
+
+        Exact equality is necessary but **not sufficient**. Request and status
+        frames share a shape -- ``FF FF ID LEN INSTR ... CHK`` against
+        ``FF FF ID LEN ERR ... CHK`` -- so a genuine reply is byte-identical to
+        its request whenever the error byte happens to equal the instruction
+        byte and the payload equals the parameters. That is not exotic: a PING
+        request is ``FF FF ID 02 01 CHK`` and a PING reply carrying error flag
+        ``0x01`` is the same six bytes, checksum included. Bit 0 of the STS
+        error byte is **under-voltage** -- precisely what a servo on marginal
+        power reports -- so a per-packet equality rule blames the adapter for
+        the one thing that is working.
+
+        Echo is a property of the *wiring*, constant for the session, so it is
+        decided once with a frame that cannot be ambiguous and then cached.
+        """
+        if not reply or reply != request:
+            return
+        if self._link_echoes is None:
+            self._link_echoes = self._link_is_echoing(servo_id)
+        if not self._link_echoes:
+            return  # link proven clean: an identical frame is a real reply
+        raise ServoEchoError(
+            f"servo {servo_id}: reply is an echo of our own request "
+            f"({reply.hex(' ')}) -- the adapter is looping TX into RX. Check "
+            "the FE-URT-2 wiring and logic-level switch before trusting any "
+            "reading; an echo can decode as a plausible but fictional angle"
+        )
+
+    def _link_is_echoing(self, servo_id: int) -> bool:
+        """Settle the ambiguity with a frame an echo provably cannot satisfy.
+
+        A single-register read request is 8 bytes whatever its length field, so
+        asking for ``_ECHO_PROBE_LEN`` bytes makes the expected reply 10 bytes.
+        An echoing link can only ever return the 8 it was given, which is a
+        short read. A real servo answers in full.
+        """
+        regs = self._require_registers("echo check")
+        request = regs.encode_read(
+            servo_id, ServoRegister.PRESENT_POSITION, self._ECHO_PROBE_LEN
+        )
+        reset = getattr(self._serial, "reset_input_buffer", None)
+        if reset is not None:
+            reset()
+        self._serial.write(request)
+        reply = self._serial.read(regs.read_reply_length(self._ECHO_PROBE_LEN))
+        try:
+            regs.parse_read_reply(reply, servo_id, self._ECHO_PROBE_LEN)
+        except RuntimeError:
+            logger.error(
+                "servo %d: link appears to echo our own frames (probe reply %s)",
+                servo_id,
+                reply.hex(" ") or "<empty>",
             )
+            return True
+        logger.debug("servo %d: link verified clean, ambiguous frame was genuine", servo_id)
+        return False
 
     def exchange(self, request: bytes, expect_bytes: int, *, servo_id: int) -> bytes:
         """One write/read with no retry, for bring-up diagnostics.

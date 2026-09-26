@@ -119,14 +119,19 @@ def test_scan_finds_only_the_servos_that_are_present():
     assert scan.baud == 1_000_000
 
 
-def test_scan_of_an_unpowered_bus_is_empty_and_says_so():
-    # FakeSTS3215Serial({}) *is* the unpowered bus: every ID silent.
+def test_scan_of_a_silent_bus_is_empty_and_does_not_blame_the_power_supply():
+    # Measured on hardware: this adapter feeds the servo's logic from USB, so a
+    # servo on USB alone still answers reads. Silence therefore is NOT the
+    # expected symptom of missing power -- it points at baud, wiring or ID, and
+    # the hint must say so rather than sending the operator to the supply.
     scan = scan_bus(_bus(FakeSTS3215Serial({})), range(0, 6), baud=1_000_000)
 
     assert scan.is_empty
     assert scan.found == ()
-    assert "no servo answered" in scan.describe()
-    assert "7.4" in scan.describe()
+    text = scan.describe()
+    assert "no servo answered" in text
+    assert "baud-sweep" in text
+    assert "cannot power a servo" not in text
 
 
 def test_scan_describe_names_each_servo_it_found():
@@ -239,3 +244,25 @@ def test_servo_ids_from_spec_rejects_broadcast_and_out_of_range():
         servo_ids_from_spec("-1")
     with pytest.raises(ValueError, match="empty|invalid"):
         servo_ids_from_spec("")
+
+
+def test_servo_ids_from_spec_validates_bounds_before_expanding_a_range():
+    # `--ids 0-20000000` used to materialise a 20-million-element set (~1GB)
+    # before raising; a longer typo would OOM the process.
+    import time
+
+    started = time.monotonic()
+    with pytest.raises(ValueError, match="0..253"):
+        servo_ids_from_spec("0-9999999999")
+    assert time.monotonic() - started < 0.1
+
+
+def test_sweep_does_not_disguise_a_configuration_mistake_as_a_refused_baud():
+    # A ValueError from open_backend ("protocol is 'mock'") is a mistake in how
+    # the command was invoked, not information about the link. Reporting it
+    # eight times as "port refused" and exiting 0 hides it.
+    def open_at(baud):
+        raise ValueError("port /dev/cu.X was given but the serial protocol is 'mock'")
+
+    with pytest.raises(ValueError, match="mock"):
+        sweep_bauds(open_at, bauds=(1_000_000, 115_200), servo_ids=[1])

@@ -20,21 +20,15 @@ from dataclasses import dataclass
 from typing import Callable, Iterable, Optional, Sequence
 
 from painterbot.control.serial_controller import (
+    BROADCAST_ID,
+    COUNTS_PER_REV,
+    MAX_SERVO_ID,
     SerialBackend,
     ServoProbe,
     ServoRegister,
 )
 
 logger = logging.getLogger("painterbot.bus_scan")
-
-#: Encoder resolution: 4096 counts per full turn, so the centre count 2048 is
-#: 180 degrees -- not the 90 degrees a 0..180 hobby servo would sit at.
-COUNTS_PER_REV = 4096
-
-#: The broadcast ID. Never probed: every servo answers at once and the replies
-#: collide on a half-duplex line, so a "scan" of it teaches us nothing.
-BROADCAST_ID = 254
-MAX_SERVO_ID = 253
 
 #: Rates an STS3215 can be configured for, factory default first.
 DEFAULT_BAUDS: tuple[int, ...] = (
@@ -167,9 +161,10 @@ class BusScan:
         if self.is_empty:
             return (
                 f"{header}\n"
-                "  no servo answered -- if the bus is not powered this is the "
-                "expected result, not a fault: connect 7.4V (>=5A) to the "
-                "FE-URT-2 screw terminal, USB alone cannot power a servo"
+                "  no servo answered. Note this is NOT simply the symptom of an "
+                "unpowered bus: this FE-URT-2 feeds the servo's logic from USB, "
+                "so a servo on USB alone still answers reads (at ~4.3V). Silence "
+                "points at baud, wiring, or servo ID -- try --baud-sweep"
             )
         lines = [f"  {identity.summary()}" for identity in self.found]
         return "\n".join([header, *lines])
@@ -253,7 +248,10 @@ def sweep_bauds(
     for baud in bauds:
         try:
             bus = open_bus_at(baud)
-        except Exception as exc:  # noqa: BLE001 - any open failure is data
+        except OSError as exc:
+            # Only an OS/driver refusal is information about the link. A
+            # ValueError is a mistake in how we were called, and repeating it
+            # once per baud while exiting 0 would bury it.
             logger.warning("baud %d refused: %s", baud, exc)
             attempt = BaudAttempt(baud=baud, open_error=str(exc))
         else:
@@ -275,8 +273,29 @@ def sweep_bauds(
     return BaudSweep(attempts=tuple(attempts))
 
 
-_RANGE_SPEC = re.compile(r"^(-?\d+)\s*-\s*(-?\d+)$")
-_SINGLE_SPEC = re.compile(r"^-?\d+$")
+# [0-9] rather than \d: \d is Unicode-aware, so "١-٥" would parse as 1-5.
+_RANGE_SPEC = re.compile(r"^(-?[0-9]+)\s*-\s*(-?[0-9]+)$")
+_SINGLE_SPEC = re.compile(r"^-?[0-9]+$")
+
+
+def check_servo_id(servo_id: int) -> int:
+    """Reject broadcast and out-of-range IDs, returning the id for chaining.
+
+    ``_sts_packet`` masks ``servo_id & 0xFF``, so an unchecked 300 silently
+    addresses servo 44 instead of failing.
+    """
+    if servo_id == BROADCAST_ID:
+        raise ValueError(
+            f"servo id {BROADCAST_ID} is the broadcast address: every servo "
+            "would answer at once and the replies would collide on the "
+            "half-duplex bus"
+        )
+    if not 0 <= servo_id <= MAX_SERVO_ID:
+        raise ValueError(f"servo id {servo_id} out of range 0..{MAX_SERVO_ID}")
+    return servo_id
+
+
+_check_servo_id = check_servo_id
 
 
 def servo_ids_from_spec(spec: str) -> tuple[int, ...]:
@@ -292,18 +311,13 @@ def servo_ids_from_spec(spec: str) -> tuple[int, ...]:
             low, high = int(span.group(1)), int(span.group(2))
             if low > high:
                 raise ValueError(f"invalid servo id range {chunk!r}: {low} > {high}")
+            # Bounds BEFORE expansion: `--ids 0-9999999999` would otherwise
+            # allocate the whole range before anyone objected to it.
+            _check_servo_id(low)
+            _check_servo_id(high)
             ids.update(range(low, high + 1))
         elif _SINGLE_SPEC.match(chunk):
-            ids.add(int(chunk))
+            ids.add(_check_servo_id(int(chunk)))
         else:
             raise ValueError(f"invalid servo id spec {spec!r} at {chunk!r}")
-    for servo_id in sorted(ids):
-        if servo_id == BROADCAST_ID:
-            raise ValueError(
-                f"servo id {BROADCAST_ID} is the broadcast address: every servo "
-                "would answer at once and the replies would collide on the "
-                "half-duplex bus"
-            )
-        if not 0 <= servo_id <= MAX_SERVO_ID:
-            raise ValueError(f"servo id {servo_id} out of range 0..{MAX_SERVO_ID}")
     return tuple(sorted(ids))

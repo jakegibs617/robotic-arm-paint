@@ -15,6 +15,8 @@ from painterbot.control.serial_controller import (
 )
 from painterbot.testing.fake_sts3215 import (
     FakeEchoingSerial,
+    sts_register_reply,
+    sts_status_reply,
     FakeGarbledSerial,
     FakeSTS3215Serial,
     SimulatedServo,
@@ -161,3 +163,52 @@ def test_write_register_rejects_a_value_too_wide_for_the_register():
         bus.write_register(1, ServoRegister.TORQUE_ENABLE, 1, 256)
     with pytest.raises(ValueError, match="does not fit"):
         bus.write_register(1, ServoRegister.GOAL_POSITION, 2, -1)
+
+
+# -- echo disambiguation ------------------------------------------------------
+
+
+def test_under_volted_servo_is_not_mistaken_for_an_echo():
+    """A PING reply carrying error flag 0x01 is byte-identical to the PING
+    request -- and bit 0 of the STS error byte is UNDER-VOLTAGE, the exact
+    condition a bench servo on marginal power reports. Treating that frame as
+    an echo would blame the adapter for the one thing that is fine."""
+    fake = FakeSTS3215Serial({1: SimulatedServo(position_counts=2048, error_flags=0x01)})
+    regs = get_feedback("sts3215").registers
+    assert regs.encode_ping(1) == sts_status_reply(1, 0x01)  # the ambiguity is real
+
+    assert _bus(fake).ping(1) == 0x01
+
+
+def test_ambiguous_position_read_from_a_real_servo_is_not_an_echo():
+    # The 2-byte read collision: error flag 0x02 with value 568 counts.
+    fake = FakeSTS3215Serial({1: SimulatedServo(position_counts=568, error_flags=0x02)})
+    regs = get_feedback("sts3215").registers
+    assert regs.encode_read(1, ServoRegister.PRESENT_POSITION, 2) == sts_register_reply(
+        1, (568).to_bytes(2, "little"), error=0x02
+    )
+
+    assert _bus(fake).read_register(1, ServoRegister.PRESENT_POSITION, 2) == 568
+
+
+def test_a_genuinely_echoing_link_is_still_caught():
+    bus = _bus(FakeEchoingSerial())
+
+    with pytest.raises(ServoEchoError, match="echo"):
+        bus.ping(1)
+
+
+def test_echo_is_decided_once_per_link_not_per_packet():
+    """Echo is a property of the wiring, constant for the session. Deciding it
+    per packet means re-running the disambiguation on every ambiguous frame."""
+    fake = FakeSTS3215Serial({1: SimulatedServo(error_flags=0x01)})
+    bus = _bus(fake)
+
+    bus.ping(1)
+    after_first = len(fake.written)
+    bus.ping(1)
+    bus.ping(1)
+
+    # The first ping pays for one disambiguating exchange; later ones do not.
+    assert after_first == 2
+    assert len(fake.written) == after_first + 2

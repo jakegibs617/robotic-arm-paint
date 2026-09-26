@@ -174,6 +174,11 @@ then run `nudge`.
 
    Record the achieved delta and its **sign** — that is the counts-to-motion
    mapping, and nothing else in the repo knows it yet.
+
+   **Do this with the horn unloaded.** The 200-count cap protects against a
+   typo, not against a mounted arm: 17.6° at the shoulder is tens of
+   centimetres at the brush, and the cap is uniform across joints and
+   deliberately ignores the per-joint safe ranges in the config.
 4. **Assign servo IDs**: servos ship as ID 1. Connect **one servo at a time**
    and assign IDs **0–5 matching the config `channel`** (0=base … 5=gripper)
    with:
@@ -188,8 +193,6 @@ then run `nudge`.
    software (Windows) is the fallback if it doesn't work as expected. Always
    confirm with `bringup scan --ids 0-11` afterwards, since the assignment does
    not read itself back. **Never do this under-voltage.**
-
-## Bring-up checklist (do in order, one servo at a time)
 
 5. **Ping the configured joints** once IDs are assigned:
 

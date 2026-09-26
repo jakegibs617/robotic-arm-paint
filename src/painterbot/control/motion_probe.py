@@ -40,11 +40,14 @@ import time
 from dataclasses import dataclass
 from typing import Callable, Literal, Optional
 
-from painterbot.control.serial_controller import RegisterBus, ServoRegister
+from painterbot.control.serial_controller import (
+    COUNTS_PER_REV,
+    RegisterBus,
+    ServoRegister,
+)
 
 logger = logging.getLogger("painterbot.motion_probe")
 
-COUNTS_PER_REV = 4096
 MAX_POSITION_COUNTS = COUNTS_PER_REV - 1
 
 #: ~5 degrees: visible by eye, small enough to be harmless on an unmounted horn.
@@ -60,6 +63,7 @@ MotionProbeStatus = Literal[
     "no_start_position",
     "no_end_position",
     "did_not_move",
+    "torque_not_released",
     "error",
 ]
 
@@ -130,7 +134,17 @@ def nudge_servo(
             requested_delta_counts=delta_counts,
         )
 
-    start = bus.read_register(servo_id, ServoRegister.PRESENT_POSITION, 2)
+    try:
+        start = bus.read_register(servo_id, ServoRegister.PRESENT_POSITION, 2)
+    except Exception as exc:  # noqa: BLE001 - a probe reports, it does not raise
+        # read_register only swallows RuntimeError: an unplugged adapter raises
+        # OSError, and an echoing link raises ServoEchoError deliberately.
+        return NudgeResult(
+            servo_id=servo_id,
+            status="error",
+            detail=f"could not read Present_Position: {exc}. Nothing was commanded",
+            requested_delta_counts=delta_counts,
+        )
     if start is None:
         return NudgeResult(
             servo_id=servo_id,
@@ -145,29 +159,44 @@ def nudge_servo(
     goal = max(0, min(MAX_POSITION_COUNTS, start + delta_counts))
     end: Optional[int] = None
     failure: Optional[str] = None
+    release_failure: Optional[str] = None
     released = False
     try:
         # Neutralise whatever goal the servo is still holding before giving it
         # the power to chase it (see the module docstring).
         bus.write_register(servo_id, ServoRegister.GOAL_POSITION, 2, start)
-        bus.set_torque(servo_id, True)
+        _set_torque(bus, servo_id, True)
         bus.write_register(servo_id, ServoRegister.GOAL_POSITION, 2, goal)
         sleep(settle_s)
         end = bus.read_register(servo_id, ServoRegister.PRESENT_POSITION, 2)
+        if end is not None:
+            # Leave the goal matching where the servo actually stopped, or the
+            # next thing to enable torque inherits a live goal and lurches to
+            # it -- the exact hazard this function exists to avoid.
+            bus.write_register(servo_id, ServoRegister.GOAL_POSITION, 2, end)
     except Exception as exc:  # noqa: BLE001 - a probe reports, it does not raise
         failure = str(exc)
         logger.warning("servo %d: motion probe failed: %s", servo_id, exc)
     finally:
         try:
-            bus.set_torque(servo_id, False)
-            released = True
-        except Exception:  # noqa: BLE001
+            _set_torque(bus, servo_id, False)
+            # Read it back rather than trusting that the bytes landed: the
+            # servo acks writes, so this is cheap, and "torque is off" is too
+            # important to infer from a write that was merely sent.
+            confirmed = bus.read_register(servo_id, ServoRegister.TORQUE_ENABLE, 1)
+            released = confirmed == 0
+            if not released:
+                release_failure = (
+                    f"Torque_Enable still reads {confirmed} after the release write"
+                )
+        except Exception as exc:  # noqa: BLE001
+            release_failure = str(exc)
             logger.exception("servo %d: could not release torque", servo_id)
 
     return NudgeResult(
         servo_id=servo_id,
-        status=_classify(start, goal, end, failure),
-        detail=_detail(start, goal, end, failure),
+        status=_classify(start, goal, end, failure, released),
+        detail=_detail(start, goal, end, failure, release_failure),
         requested_delta_counts=delta_counts,
         start_counts=start,
         goal_counts=goal,
@@ -176,9 +205,22 @@ def nudge_servo(
     )
 
 
+def _set_torque(bus: RegisterBus, servo_id: int, enabled: bool) -> None:
+    """Torque enable is a register write, not a separate operation."""
+    bus.write_register(servo_id, ServoRegister.TORQUE_ENABLE, 1, int(enabled))
+
+
 def _classify(
-    start: int, goal: int, end: Optional[int], failure: Optional[str]
+    start: int,
+    goal: int,
+    end: Optional[int],
+    failure: Optional[str],
+    released: bool,
 ) -> MotionProbeStatus:
+    # A servo that may still be energised outranks every other outcome: it is
+    # the one state that stays dangerous after this function returns.
+    if not released:
+        return "torque_not_released"
     if failure is not None:
         return "error"
     if end is None:
@@ -188,7 +230,18 @@ def _classify(
     return "success"
 
 
-def _detail(start: int, goal: int, end: Optional[int], failure: Optional[str]) -> str:
+def _detail(
+    start: int,
+    goal: int,
+    end: Optional[int],
+    failure: Optional[str],
+    release_failure: Optional[str],
+) -> str:
+    if release_failure is not None:
+        return (
+            f"TORQUE MAY STILL BE ENABLED: releasing it failed ({release_failure}). "
+            "Power the bus down rather than trusting the servo to be limp"
+        )
     if failure is not None:
         return f"bus error during the move: {failure}"
     if end is None:

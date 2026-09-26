@@ -35,7 +35,7 @@
     "measured_voltage_v": 4.3,
     "supply_rating_a": null,
     "power_switch_location": null,
-    "notes": "USB power only so far. Surprise: the FE-URT-2 DOES pass USB 5V to the servo bus -- the servo answers fully at 4.3V, so a silent bus is not the symptom of a missing supply and 'it answered' does not mean the supply is adequate. Below the 6-8.4V spec: no motion commanded. 7.4V >=5A still required. Servo's own voltage protection registers read 4.0-8.0 V (0x0f/0x0e), which is why it boots on USB. NOTE 8.0 V not 8.4: a freshly charged 2S LiPo exceeds the servo's own limit -- use a bench supply at 7.4 V."
+    "notes": "USB power only so far. Surprise: THIS FE-URT-2 unit passes USB 5V to the servo bus (one unit, one revision -- not verified as general to the family) -- the servo answers fully at 4.3V, so a silent bus is not the symptom of a missing supply and 'it answered' does not mean the supply is adequate. Below the 6-8.4V spec: no motion commanded. 7.4V >=5A still required. Servo's own voltage protection registers read 4.0-8.0 V (0x0f/0x0e), which is why it boots on USB. NOTE 8.0 V not 8.4: a freshly charged 2S LiPo exceeds the servo's own limit -- use a bench supply at 7.4 V."
    }
   },
   {
