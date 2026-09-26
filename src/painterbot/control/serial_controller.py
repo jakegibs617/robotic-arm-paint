@@ -42,6 +42,21 @@ from typing import Callable, Optional, Protocol
 
 logger = logging.getLogger("painterbot.serial")
 
+
+class ServoEchoError(RuntimeError):
+    """The "reply" was our own request coming back.
+
+    A half-duplex adapter that loops TX into RX makes an echoed request look
+    like a valid status packet: the header, the ID and even the checksum all
+    check out, because the request is itself a well-formed frame. An echoed
+    2-byte Present_Position read decodes to a plausible, repeatable, entirely
+    fictional angle. Comparing the reply against the request is the only way to
+    catch it, so this is raised rather than folded into "no reply" -- an echoing
+    adapter is a wiring fault, not an absent servo, and retrying cannot help.
+
+    Subclasses ``RuntimeError`` so existing callers keep catching it.
+    """
+
 #: A protocol encoder turns a servo command into the bytes to put on the wire.
 ProtocolEncoder = Callable[[int, float], bytes]
 
@@ -70,6 +85,35 @@ class SerialBackend(Protocol):
 
 
 # -- wire encoders -----------------------------------------------------------
+
+
+class ServoProbe(Protocol):
+    """Read-only, single-exchange access to one servo's control table.
+
+    Deliberately narrower than ``SerialBackend``: a bus scan depends on this and
+    nothing else, so "a scan cannot move a servo" is a property of the types
+    rather than a promise in a comment. Both methods answer ``None`` for a servo
+    that did not reply, and neither retries -- a sweep over 254 IDs cannot afford
+    a hidden second attempt per absent ID.
+    """
+
+    def ping(self, servo_id: int) -> Optional[int]:
+        """Error flags from a PING reply, or ``None`` if nothing answered."""
+        ...
+
+    def read_register(self, servo_id: int, address: int, length: int) -> Optional[int]:
+        """``length`` bytes at ``address`` as an int, or ``None`` on no reply."""
+        ...
+
+
+class RegisterBus(ServoProbe, Protocol):
+    """A ``ServoProbe`` that can also write -- what a motion probe needs."""
+
+    def write_register(self, servo_id: int, address: int, length: int, value: int) -> None:
+        ...
+
+    def set_torque(self, channel: int, enabled: bool) -> None:
+        ...
 
 
 def _encode_ascii_servo(channel: int, angle: float) -> bytes:
@@ -477,8 +521,12 @@ class PySerialBackend:
             reset = getattr(self._serial, "reset_input_buffer", None)
             if reset is not None:
                 reset()
-            self._serial.write(fb.encode_read_position(channel))
+            request = fb.encode_read_position(channel)
+            self._serial.write(request)
             raw = self._serial.read(fb.reply_length)
+            # An echoed read request validates as a status packet and decodes to
+            # a fictional angle, so it must be rejected before parsing.
+            self._reject_echo(request, raw, channel)
             try:
                 angle = fb.parse_position_reply(raw, channel)
             except RuntimeError as exc:
@@ -489,6 +537,85 @@ class PySerialBackend:
             return angle
         assert last_exc is not None
         raise last_exc
+
+    def _require_registers(self, what: str) -> RegisterAccess:
+        fb = self._require_feedback(what)
+        if fb.registers is None:
+            raise RuntimeError(
+                f"{what} needs a protocol with register-level access (e.g. "
+                "sts3215); the current protocol does not expose one"
+            )
+        return fb.registers
+
+    @staticmethod
+    def _reject_echo(request: bytes, reply: bytes, servo_id: int) -> None:
+        # Exact equality only. A *truncated* genuine reply shares the request's
+        # first bytes (both frames start FF FF ID LEN with the same LEN), so a
+        # prefix match would misread a short read as an echo. An adapter that
+        # loops TX into RX returns the whole request, so exact equality is both
+        # sufficient and free of that false positive.
+        if reply and reply == request:
+            raise ServoEchoError(
+                f"servo {servo_id}: reply is an echo of our own request "
+                f"({reply.hex(' ')}) -- the adapter is looping TX into RX. Check "
+                "the FE-URT-2 wiring and logic-level switch before trusting any "
+                "reading; an echo can decode as a plausible but fictional angle"
+            )
+
+    def exchange(self, request: bytes, expect_bytes: int, *, servo_id: int) -> bytes:
+        """One write/read with no retry, for bring-up diagnostics.
+
+        Flushes stale input first (STS servos may ack writes), then returns
+        whatever arrived -- empty when nothing did. Raises ``ServoEchoError`` if
+        the reply is our own request.
+        """
+        reset = getattr(self._serial, "reset_input_buffer", None)
+        if reset is not None:
+            reset()
+        self._serial.write(request)
+        reply = self._serial.read(expect_bytes)
+        self._reject_echo(request, reply, servo_id)
+        return reply
+
+    def ping(self, servo_id: int) -> Optional[int]:
+        regs = self._require_registers("ping")
+        request = regs.encode_ping(servo_id)
+        reply = self.exchange(request, regs.status_length, servo_id=servo_id)
+        try:
+            return regs.parse_status(reply, servo_id)
+        except ServoEchoError:
+            raise
+        except RuntimeError as exc:
+            logger.debug("ping %d: %s", servo_id, exc)
+            return None
+
+    def read_register(self, servo_id: int, address: int, length: int) -> Optional[int]:
+        regs = self._require_registers("read_register")
+        request = regs.encode_read(servo_id, int(address), length)
+        reply = self.exchange(request, regs.read_reply_length(length), servo_id=servo_id)
+        try:
+            return regs.parse_read_reply(reply, servo_id, length)
+        except ServoEchoError:
+            raise
+        except RuntimeError as exc:
+            logger.debug("read_register %d @0x%02x: %s", servo_id, int(address), exc)
+            return None
+
+    def write_register(self, servo_id: int, address: int, length: int, value: int) -> None:
+        """Write a register. Whether a real STS3215 acks a write is still
+        unknown (Response Status Level, register 0x08), so any ack is left in the
+        input buffer for the next ``exchange`` to flush."""
+        regs = self._require_registers("write_register")
+        payload = regs.encode_write(servo_id, int(address), length, value)
+        self._serial.write(payload)
+        logger.debug(
+            "TX id=%d @0x%02x len=%d value=%d bytes=%s",
+            servo_id,
+            int(address),
+            length,
+            value,
+            payload.hex(" "),
+        )
 
     def set_torque(self, channel: int, enabled: bool) -> None:
         fb = self._require_feedback("set_torque")
