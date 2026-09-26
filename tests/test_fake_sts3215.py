@@ -234,3 +234,17 @@ def test_echoing_serial_returns_the_request_verbatim():
     fake.write(request)
 
     assert fake.read(8) == request
+
+
+def test_fake_models_implicit_torque_enable_on_a_differing_goal():
+    """Confirmed on hardware 2026-09-26: writing a Goal_Position that differs
+    from the present position implicitly enables torque, while writing a goal
+    equal to the present position does not. A goal write is not inert."""
+    fake = FakeSTS3215Serial({1: SimulatedServo(position_counts=2000, stuck=True)})
+    regs = _regs()
+
+    fake.write(regs.encode_write(1, ServoRegister.GOAL_POSITION, 2, 2000))
+    assert fake.servos[1].torque_enabled is False
+
+    fake.write(regs.encode_write(1, ServoRegister.GOAL_POSITION, 2, 2100))
+    assert fake.servos[1].torque_enabled is True

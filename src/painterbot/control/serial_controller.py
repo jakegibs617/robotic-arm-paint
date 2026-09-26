@@ -606,6 +606,17 @@ class PySerialBackend:
         unknown (Response Status Level, register 0x08), so any ack is left in the
         input buffer for the next ``exchange`` to flush."""
         regs = self._require_registers("write_register")
+        if value is None:
+            raise ValueError(
+                f"servo {servo_id}: no value to write to register "
+                f"0x{int(address):02x}. A failed read returns None -- check it "
+                "before feeding it back into a write"
+            )
+        if not 0 <= value < (1 << (8 * length)):
+            raise ValueError(
+                f"servo {servo_id}: value {value} does not fit in the "
+                f"{length}-byte register at 0x{int(address):02x}"
+            )
         payload = regs.encode_write(servo_id, int(address), length, value)
         self._serial.write(payload)
         logger.debug(

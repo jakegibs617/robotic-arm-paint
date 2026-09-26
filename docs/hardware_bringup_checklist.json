@@ -247,7 +247,7 @@
     ],
     "error_flags": 0,
     "adapter_echo_observed": false,
-    "notes": "Measured 2026-09-26 on USB power only. Model 777 = MODEL_L 9 + MODEL_H 3*256, confirming STS3215. Read path (PING, register reads, framing, checksums, little-endian decode) verified against real hardware for the first time. Full read-only register dump also showed: torque off at rest, a STALE Goal_Position of 0 while sitting at 4094 counts (enabling torque in that state would command a near-full-turn slam -- motion_probe now overwrites the goal with the current position before energising), and Response Status Level 1 (the servo acks every write).",
+    "notes": "Measured 2026-09-26 on USB power only. Model 777 = MODEL_L 9 + MODEL_H 3*256, confirming STS3215. Read path (PING, register reads, framing, checksums, little-endian decode) verified against real hardware for the first time. Full read-only register dump also showed: torque off at rest, a STALE Goal_Position of 0 while sitting at 4094 counts (enabling torque in that state would command a near-full-turn slam -- motion_probe now overwrites the goal with the current position before energising), and Response Status Level 1 (the servo acks every write). Measured directly: a Goal_Position write that DIFFERS from the present position implicitly enables torque (0 -> 1), while a write equal to the present position does not. A goal write is the act of energising; nothing can pre-stage a goal without committing to motion.",
     "torque_enable_at_rest": 0,
     "goal_position_at_rest": 0,
     "response_status_level": 1,
@@ -257,7 +257,8 @@
      8.0
     ],
     "temperature_limit_c": 70,
-    "max_torque_limit": 1000
+    "max_torque_limit": 1000,
+    "goal_write_implicitly_enables_torque": true
    }
   },
   {
@@ -272,7 +273,8 @@
     "max_delta_counts": 200,
     "start_with_zero_delta": true,
     "requires_voltage_v": 7.4,
-    "neutralise_stale_goal_before_torque": true
+    "neutralise_stale_goal_before_torque": true,
+    "goal_write_implicitly_enables_torque": true
    },
    "record": {
     "zero_delta_status": null,

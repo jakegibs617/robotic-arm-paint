@@ -202,6 +202,12 @@ def _apply_write(servo: SimulatedServo, address: int, payload: bytes) -> None:
     value = int.from_bytes(payload, "little") if payload else 0
     if address == ServoRegister.GOAL_POSITION:
         servo.goal_counts = value
+        if value != servo.position_counts:
+            # Confirmed on hardware: a goal that differs from the present
+            # position implicitly enables torque, while a goal equal to it does
+            # not. So a goal write is never inert -- it is the act of
+            # energising, which is why nothing can "pre-stage" a goal.
+            servo.torque_enabled = True
         if not servo.stuck:
             servo.position_counts = value
     elif address == ServoRegister.TORQUE_ENABLE:

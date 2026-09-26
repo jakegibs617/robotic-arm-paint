@@ -17,8 +17,15 @@ Safety properties, in order of how much they matter:
   theoretical: the bench STS3215 was found sitting at 4094 counts with
   Goal_Position still at its factory 0. Enabling torque in that state commands a
   near-full-turn slam to 0 before any deliberate goal is sent, which on a
-  mounted arm is a collision. So the goal register is overwritten with the
-  servo's current position while it is still limp.
+  mounted arm is a collision.
+
+  The neutralising write is safe for a specific, measured reason: on this servo
+  a goal write that *differs* from the present position implicitly enables
+  torque, while a goal write *equal* to it does not. Writing ``goal = start`` is
+  therefore the only goal write that cannot energise or move the servo -- which
+  is precisely why it is the one used. Corollary: there is no way to "pre-stage"
+  a goal position without energising, so any code that writes a goal is
+  committing to motion, whether or not it calls ``set_torque`` first.
 * The goal is clamped into the encoder range.
 * Torque is released in a ``finally``, so a failure cannot leave the servo
   energised.

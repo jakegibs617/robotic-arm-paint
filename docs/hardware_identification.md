@@ -100,9 +100,30 @@ travel nearly a full turn to reach 0, immediately, at whatever speed it can
 manage. On a mounted arm that is a collision.
 
 `motion_probe.nudge_servo` therefore overwrites `Goal_Position` with the servo's
-*current* position while it is still limp, and only then enables torque. Anything
-else that enables torque — the jog CLI, `Arm.set_torque` — has the same hazard and
-has **not** been audited for it yet.
+*current* position first, and only then enables torque. Anything else that
+enables torque — the jog CLI, `Arm.set_torque` — has the same hazard and has
+**not** been audited for it yet.
+
+### A goal write is not inert: it implicitly enables torque
+
+Measured directly, torque starting at 0:
+
+| Write | Torque after |
+|---|---|
+| `Goal_Position` = present position | **0** — unchanged |
+| `Goal_Position` = present − 1 count | **1** — energised |
+
+So writing a goal that differs from where the servo is *is* the act of
+energising it; `Torque_Enable` need never be written. There is no way to
+pre-stage a goal position without committing to motion. Two consequences:
+
+- Writing `goal = present` is the only goal write that cannot move the servo.
+  That is exactly why `nudge_servo` uses it to clear the stale goal.
+- Any code path that writes a goal — `Servo.move_to`, `Arm.move_to_pose` — leaves
+  the servo energised afterwards, regardless of whether it called `set_torque`.
+  The hand-guided calibration flow in [calibration.md](calibration.md) (`torque
+  off` → move by hand → `read`) only holds as long as nothing writes a goal in
+  between.
 
 ### Surprise: this FE-URT-2 passes USB 5 V to the servo bus
 

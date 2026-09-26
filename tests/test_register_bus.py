@@ -142,3 +142,22 @@ def test_register_access_refuses_a_feedback_protocol_without_a_memory_map():
 
     with pytest.raises(RuntimeError, match="register-level access"):
         bus.read_register(1, ServoRegister.MODEL, 2)
+
+
+def test_write_register_rejects_a_missing_value_with_a_clear_message():
+    """A failed read returns None. Passing that straight into a write used to
+    blow up as `TypeError: unsupported operand type(s) for >>: 'NoneType'`
+    from inside the encoder -- three frames from the actual mistake."""
+    bus = _bus(FakeSTS3215Serial({1: SimulatedServo()}))
+
+    with pytest.raises(ValueError, match="no value to write"):
+        bus.write_register(1, ServoRegister.GOAL_POSITION, 2, None)
+
+
+def test_write_register_rejects_a_value_too_wide_for_the_register():
+    bus = _bus(FakeSTS3215Serial({1: SimulatedServo()}))
+
+    with pytest.raises(ValueError, match="does not fit"):
+        bus.write_register(1, ServoRegister.TORQUE_ENABLE, 1, 256)
+    with pytest.raises(ValueError, match="does not fit"):
+        bus.write_register(1, ServoRegister.GOAL_POSITION, 2, -1)
