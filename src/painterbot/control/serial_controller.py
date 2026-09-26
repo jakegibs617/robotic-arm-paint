@@ -37,9 +37,25 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from enum import IntEnum
 from typing import Callable, Optional, Protocol
 
 logger = logging.getLogger("painterbot.serial")
+
+
+class ServoEchoError(RuntimeError):
+    """The "reply" was our own request coming back.
+
+    A half-duplex adapter that loops TX into RX makes an echoed request look
+    like a valid status packet: the header, the ID and even the checksum all
+    check out, because the request is itself a well-formed frame. An echoed
+    2-byte Present_Position read decodes to a plausible, repeatable, entirely
+    fictional angle. Comparing the reply against the request is the only way to
+    catch it, so this is raised rather than folded into "no reply" -- an echoing
+    adapter is a wiring fault, not an absent servo, and retrying cannot help.
+
+    Subclasses ``RuntimeError`` so existing callers keep catching it.
+    """
 
 #: A protocol encoder turns a servo command into the bytes to put on the wire.
 ProtocolEncoder = Callable[[int, float], bytes]
@@ -69,6 +85,38 @@ class SerialBackend(Protocol):
 
 
 # -- wire encoders -----------------------------------------------------------
+
+
+class ServoProbe(Protocol):
+    """Read-only, single-exchange access to one servo's control table.
+
+    Deliberately narrower than ``SerialBackend``: a bus scan depends on this and
+    nothing else, so "a scan cannot move a servo" is a property of the types
+    rather than a promise in a comment. Both methods answer ``None`` for a servo
+    that did not reply, and neither retries -- a sweep over 254 IDs cannot afford
+    a hidden second attempt per absent ID.
+    """
+
+    def ping(self, servo_id: int) -> Optional[int]:
+        """Error flags from a PING reply, or ``None`` if nothing answered."""
+        ...
+
+    def read_register(self, servo_id: int, address: int, length: int) -> Optional[int]:
+        """``length`` bytes at ``address`` as an int, or ``None`` on no reply."""
+        ...
+
+
+class RegisterBus(ServoProbe, Protocol):
+    """A ``ServoProbe`` that can also write -- what a motion probe needs.
+
+    Deliberately only the two operations the wire has. Torque enable is not a
+    separate concept here, it is ``write_register(TORQUE_ENABLE, ...)``; keeping
+    ``set_torque`` would also drag the ``Servo``/``Arm`` word "channel" into a
+    raw-bus role that speaks in servo IDs.
+    """
+
+    def write_register(self, servo_id: int, address: int, length: int, value: int) -> None:
+        ...
 
 
 def _encode_ascii_servo(channel: int, angle: float) -> bytes:
@@ -107,16 +155,50 @@ def _encode_lx16a(channel: int, angle: float, *, move_time_ms: int = 0) -> bytes
 # (header excluded). STS-series registers are little-endian (low byte first).
 # Position resolution: 4096 counts per 360° (mid position 2048 = 180°).
 
+_STS_INSTR_PING = 0x01
 _STS_INSTR_READ = 0x02
 _STS_INSTR_WRITE = 0x03
-_STS_REG_ID = 0x05  # 5, 1 byte (EEPROM)
-_STS_REG_LOCK = 0x37  # 55, 1 byte (EEPROM write-protect: 0=unlock, 1=lock)
-_STS_REG_TORQUE_ENABLE = 0x28  # 40, 1 byte
-_STS_REG_GOAL_POSITION = 0x2A  # 42, 2 bytes
-_STS_REG_PRESENT_POSITION = 0x38  # 56, 2 bytes
-_STS_COUNTS_PER_REV = 4096
+
+
+class ServoRegister(IntEnum):
+    """STS/SMS control-table addresses.
+
+    Public on purpose: callers outside this module (bus scan, identification)
+    need to name the register they want without knowing its address, which keeps
+    raw addresses from leaking out of the serial layer (see the "Leaky Hardware
+    Protocol" anti-pattern in docs/technical_analysis_oo_design.md).
+
+    Every address is taken from the Feetech memory map and is **unverified
+    against a physical servo**, exactly like the rest of this protocol.
+    """
+
+    FIRMWARE = 0x00  # 0..1, major/minor
+    MODEL = 0x03  # 3..4, 2 bytes
+    ID = 0x05  # 5, 1 byte (EEPROM)
+    BAUD_CODE = 0x06  # 6, 1 byte (EEPROM; index into the baud table)
+    MIN_ANGLE_LIMIT = 0x09  # 9..10, 2 bytes (EEPROM)
+    MAX_ANGLE_LIMIT = 0x0B  # 11..12, 2 bytes (EEPROM)
+    TORQUE_ENABLE = 0x28  # 40, 1 byte
+    GOAL_POSITION = 0x2A  # 42, 2 bytes
+    LOCK = 0x37  # 55, 1 byte (EEPROM write-protect: 0=unlock, 1=lock)
+    PRESENT_POSITION = 0x38  # 56, 2 bytes
+    PRESENT_VOLTAGE = 0x3E  # 62, 1 byte, units of 0.1 V
+    PRESENT_TEMPERATURE = 0x3F  # 63, 1 byte, degrees C
+
+
+#: Encoder resolution: 4096 counts per full turn, so the centre count 2048 is
+#: 180 degrees. Public because it is the scale the position registers are
+#: measured in, and callers outside this module decode those registers.
+COUNTS_PER_REV = 4096
+
+#: 254 addresses every servo at once; on a half-duplex bus the replies collide.
+BROADCAST_ID = 254
+MAX_SERVO_ID = 253
+
+_STS_COUNTS_PER_REV = COUNTS_PER_REV
+_STS_STATUS_LEN = 6  # FF FF ID LEN ERR CHK -- a bare acknowledgement
 _STS_POSITION_REPLY_LEN = 8  # FF FF ID LEN ERR POS_LO POS_HI CHK
-_STS_MAX_ID = 253  # 254 is the broadcast ID; 0..253 are assignable
+_STS_MAX_ID = MAX_SERVO_ID
 
 
 def _sts_packet(servo_id: int, instruction: int, params: list[int]) -> bytes:
@@ -125,23 +207,84 @@ def _sts_packet(servo_id: int, instruction: int, params: list[int]) -> bytes:
     return bytes([0xFF, 0xFF, *body, checksum])
 
 
+def _sts_read_reply_length(value_length: int) -> int:
+    """Total status-packet size for a read of ``value_length`` bytes."""
+    return _STS_STATUS_LEN + value_length
+
+
+def _encode_sts3215_ping(servo_id: int) -> bytes:
+    """PING (instruction 0x01) -- no params; the servo answers a bare status packet."""
+    return _sts_packet(servo_id, _STS_INSTR_PING, [])
+
+
+def _encode_sts3215_read(servo_id: int, address: int, length: int) -> bytes:
+    """READ ``length`` bytes starting at ``address``."""
+    return _sts_packet(servo_id, _STS_INSTR_READ, [int(address), length])
+
+
+def _encode_sts3215_write(servo_id: int, address: int, length: int, value: int) -> bytes:
+    """WRITE ``value`` as ``length`` little-endian bytes starting at ``address``."""
+    payload = [(value >> (8 * i)) & 0xFF for i in range(length)]
+    return _sts_packet(servo_id, _STS_INSTR_WRITE, [int(address), *payload])
+
+
+def _check_sts3215_reply(data: bytes, servo_id: int, expected_len: int, what: str) -> int:
+    """Validate a status packet of ``expected_len`` bytes; return its error byte.
+
+    Raises ``RuntimeError`` on a missing/short/corrupt reply -- during bring-up a
+    loud, hex-dumped failure beats a silent wrong value.
+    """
+    if len(data) < expected_len:
+        raise RuntimeError(
+            f"servo {servo_id}: no/short {what} reply ({len(data)} bytes: "
+            f"{data.hex(' ') or '<empty>'}); check power, wiring, ID and baud"
+        )
+    if data[0:2] != b"\xff\xff":
+        raise RuntimeError(f"servo {servo_id}: bad reply header {data[:2].hex(' ')}")
+    if data[2] != servo_id:
+        raise RuntimeError(f"servo {servo_id}: reply came from ID {data[2]}")
+    if (~sum(data[2 : expected_len - 1])) & 0xFF != data[expected_len - 1]:
+        raise RuntimeError(f"servo {servo_id}: reply checksum mismatch ({data.hex(' ')})")
+    return data[4]
+
+
+def _parse_sts3215_status(data: bytes, servo_id: int) -> int:
+    """Decode a bare acknowledgement (e.g. a PING reply) into its error flags."""
+    return _check_sts3215_reply(data, servo_id, _STS_STATUS_LEN, "status")
+
+
+def _parse_sts3215_read_reply(
+    data: bytes, servo_id: int, length: int, what: str = "register"
+) -> int:
+    """Decode a register read reply into its little-endian integer value.
+
+    ``what`` only names the register in failure messages -- callers that read a
+    specific register (e.g. Present_Position) pass their own word so bring-up
+    diagnostics stay readable.
+    """
+    flags = _check_sts3215_reply(data, servo_id, _sts_read_reply_length(length), what)
+    if flags:
+        # Error flags (voltage/overheat/overload...) -- the value is still valid.
+        logger.warning("servo %d reports error flags 0x%02x", servo_id, flags)
+    return int.from_bytes(data[5 : 5 + length], "little")
+
+
 def _encode_sts3215(channel: int, angle: float) -> bytes:
     """WRITE Goal_Position. The servo bus ID is the config channel (0..5)."""
     pos = max(0, min(_STS_COUNTS_PER_REV - 1, round(angle * _STS_COUNTS_PER_REV / 360.0)))
-    params = [_STS_REG_GOAL_POSITION, pos & 0xFF, (pos >> 8) & 0xFF]
-    return _sts_packet(channel, _STS_INSTR_WRITE, params)
+    return _encode_sts3215_write(channel, ServoRegister.GOAL_POSITION, 2, pos)
 
 
 def _encode_sts3215_torque(channel: int, enabled: bool) -> bytes:
     """WRITE Torque_Enable — 0 makes the servo limp (hand-guidable)."""
-    return _sts_packet(
-        channel, _STS_INSTR_WRITE, [_STS_REG_TORQUE_ENABLE, 1 if enabled else 0]
+    return _encode_sts3215_write(
+        channel, ServoRegister.TORQUE_ENABLE, 1, 1 if enabled else 0
     )
 
 
 def _encode_sts3215_read_position(channel: int) -> bytes:
     """READ 2 bytes at Present_Position."""
-    return _sts_packet(channel, _STS_INSTR_READ, [_STS_REG_PRESENT_POSITION, 2])
+    return _encode_sts3215_read(channel, ServoRegister.PRESENT_POSITION, 2)
 
 
 def _encode_sts3215_lock(channel: int, locked: bool) -> bytes:
@@ -150,7 +293,7 @@ def _encode_sts3215_lock(channel: int, locked: bool) -> bytes:
     Servos ship locked. Reassigning an ID means unlock -> write ID -> lock; see
     ``_encode_sts3215_set_id`` for why the *lock* packet must address the new ID.
     """
-    return _sts_packet(channel, _STS_INSTR_WRITE, [_STS_REG_LOCK, 1 if locked else 0])
+    return _encode_sts3215_write(channel, ServoRegister.LOCK, 1, 1 if locked else 0)
 
 
 def _encode_sts3215_set_id(channel: int, new_id: int) -> bytes:
@@ -163,7 +306,7 @@ def _encode_sts3215_set_id(channel: int, new_id: int) -> bytes:
     """
     if not 0 <= new_id <= _STS_MAX_ID:
         raise ValueError(f"servo id {new_id} out of range 0..{_STS_MAX_ID}")
-    return _sts_packet(channel, _STS_INSTR_WRITE, [_STS_REG_ID, new_id & 0xFF])
+    return _encode_sts3215_write(channel, ServoRegister.ID, 1, new_id & 0xFF)
 
 
 def _parse_sts3215_position_reply(data: bytes, channel: int) -> float:
@@ -172,22 +315,44 @@ def _parse_sts3215_position_reply(data: bytes, channel: int) -> float:
     Raises ``RuntimeError`` on a missing/short/corrupt reply — during bring-up a
     loud, hex-dumped failure beats a silent wrong angle.
     """
-    if len(data) < _STS_POSITION_REPLY_LEN:
-        raise RuntimeError(
-            f"servo {channel}: no/short position reply ({len(data)} bytes: "
-            f"{data.hex(' ') or '<empty>'}); check power, wiring, ID and baud"
-        )
-    if data[0:2] != b"\xff\xff":
-        raise RuntimeError(f"servo {channel}: bad reply header {data[:2].hex(' ')}")
-    if data[2] != channel:
-        raise RuntimeError(f"servo {channel}: reply came from ID {data[2]}")
-    if (~sum(data[2:7])) & 0xFF != data[7]:
-        raise RuntimeError(f"servo {channel}: reply checksum mismatch ({data.hex(' ')})")
-    if data[4] != 0:
-        # Error flags (voltage/overheat/overload...) — position is still valid.
-        logger.warning("servo %d reports error flags 0x%02x", channel, data[4])
-    pos = data[5] | (data[6] << 8)
+    pos = _parse_sts3215_read_reply(data, channel, 2, "position")
     return pos * 360.0 / _STS_COUNTS_PER_REV
+
+
+@dataclass(frozen=True)
+class RegisterAccess:
+    """Address-level access to a bus servo's control table.
+
+    Bring-up needs to ask a servo what it *is* (model, firmware) and how it is
+    (voltage, temperature), which is far more of the memory map than the five
+    fixed operations ``FeedbackProtocol`` covers. Rather than add a closure per
+    register, this exposes the two operations the wire actually has -- read N
+    bytes at an address, write N bytes to an address -- plus PING, which is a
+    distinct instruction rather than a register access.
+    """
+
+    encode_ping: Callable[[int], bytes]
+    encode_read: Callable[[int, int, int], bytes]
+    encode_write: Callable[[int, int, int, int], bytes]
+    parse_read_reply: Callable[[bytes, int, int], int]
+    parse_status: Callable[[bytes, int], int]
+    #: Bytes in a bare acknowledgement. A read reply is this plus the value
+    #: width -- computed at the call site rather than stored, so the two cannot
+    #: drift apart.
+    status_length: int
+
+    def read_reply_length(self, value_length: int) -> int:
+        return self.status_length + value_length
+
+
+_STS3215_REGISTERS = RegisterAccess(
+    encode_ping=_encode_sts3215_ping,
+    encode_read=_encode_sts3215_read,
+    encode_write=_encode_sts3215_write,
+    parse_read_reply=_parse_sts3215_read_reply,
+    parse_status=_parse_sts3215_status,
+    status_length=_STS_STATUS_LEN,
+)
 
 
 @dataclass(frozen=True)
@@ -204,6 +369,9 @@ class FeedbackProtocol:
     reply_length: int
     encode_set_id: Optional[Callable[[int, int], bytes]] = None
     encode_lock: Optional[Callable[[int, bool], bytes]] = None
+    #: Address-level access, for bring-up scan/identification. Optional because
+    #: only dialects with a documented memory map can offer it.
+    registers: Optional[RegisterAccess] = None
 
 
 # -- protocol registry -------------------------------------------------------
@@ -225,6 +393,7 @@ _FEEDBACK: dict[str, FeedbackProtocol] = {
         reply_length=_STS_POSITION_REPLY_LEN,
         encode_set_id=_encode_sts3215_set_id,
         encode_lock=_encode_sts3215_lock,
+        registers=_STS3215_REGISTERS,
     ),
 }
 
@@ -330,6 +499,9 @@ class PySerialBackend:
     ) -> None:
         self._encode: ProtocolEncoder = encoder or _encode_ascii_servo
         self._feedback = feedback
+        #: Tri-state: None = not yet determined, True/False = settled for this
+        #: port. Echo is a wiring property, so it is decided once, not per packet.
+        self._link_echoes: Optional[bool] = None
         if serial_obj is not None:
             self._serial = serial_obj
             logger.info("Using injected serial object for %s", port)
@@ -368,8 +540,12 @@ class PySerialBackend:
             reset = getattr(self._serial, "reset_input_buffer", None)
             if reset is not None:
                 reset()
-            self._serial.write(fb.encode_read_position(channel))
+            request = fb.encode_read_position(channel)
+            self._serial.write(request)
             raw = self._serial.read(fb.reply_length)
+            # An echoed read request validates as a status packet and decodes to
+            # a fictional angle, so it must be rejected before parsing.
+            self._reject_echo(request, raw, channel)
             try:
                 angle = fb.parse_position_reply(raw, channel)
             except RuntimeError as exc:
@@ -380,6 +556,145 @@ class PySerialBackend:
             return angle
         assert last_exc is not None
         raise last_exc
+
+    def _require_registers(self, what: str) -> RegisterAccess:
+        fb = self._require_feedback(what)
+        if fb.registers is None:
+            raise RuntimeError(
+                f"{what} needs a protocol with register-level access (e.g. "
+                "sts3215); the current protocol does not expose one"
+            )
+        return fb.registers
+
+    #: Number of register bytes read by the echo disambiguation probe. Any value
+    #: other than 2 makes the expected reply a different length from the 8-byte
+    #: request; 4 makes it *longer* (10 bytes), which an echo can never fill.
+    _ECHO_PROBE_LEN = 4
+
+    def _reject_echo(self, request: bytes, reply: bytes, servo_id: int) -> None:
+        """Raise if the link is echoing our own request back at us.
+
+        Exact equality is necessary but **not sufficient**. Request and status
+        frames share a shape -- ``FF FF ID LEN INSTR ... CHK`` against
+        ``FF FF ID LEN ERR ... CHK`` -- so a genuine reply is byte-identical to
+        its request whenever the error byte happens to equal the instruction
+        byte and the payload equals the parameters. That is not exotic: a PING
+        request is ``FF FF ID 02 01 CHK`` and a PING reply carrying error flag
+        ``0x01`` is the same six bytes, checksum included. Bit 0 of the STS
+        error byte is **under-voltage** -- precisely what a servo on marginal
+        power reports -- so a per-packet equality rule blames the adapter for
+        the one thing that is working.
+
+        Echo is a property of the *wiring*, constant for the session, so it is
+        decided once with a frame that cannot be ambiguous and then cached.
+        """
+        if not reply or reply != request:
+            return
+        if self._link_echoes is None:
+            self._link_echoes = self._link_is_echoing(servo_id)
+        if not self._link_echoes:
+            return  # link proven clean: an identical frame is a real reply
+        raise ServoEchoError(
+            f"servo {servo_id}: reply is an echo of our own request "
+            f"({reply.hex(' ')}) -- the adapter is looping TX into RX. Check "
+            "the FE-URT-2 wiring and logic-level switch before trusting any "
+            "reading; an echo can decode as a plausible but fictional angle"
+        )
+
+    def _link_is_echoing(self, servo_id: int) -> bool:
+        """Settle the ambiguity with a frame an echo provably cannot satisfy.
+
+        A single-register read request is 8 bytes whatever its length field, so
+        asking for ``_ECHO_PROBE_LEN`` bytes makes the expected reply 10 bytes.
+        An echoing link can only ever return the 8 it was given, which is a
+        short read. A real servo answers in full.
+        """
+        regs = self._require_registers("echo check")
+        request = regs.encode_read(
+            servo_id, ServoRegister.PRESENT_POSITION, self._ECHO_PROBE_LEN
+        )
+        reset = getattr(self._serial, "reset_input_buffer", None)
+        if reset is not None:
+            reset()
+        self._serial.write(request)
+        reply = self._serial.read(regs.read_reply_length(self._ECHO_PROBE_LEN))
+        try:
+            regs.parse_read_reply(reply, servo_id, self._ECHO_PROBE_LEN)
+        except RuntimeError:
+            logger.error(
+                "servo %d: link appears to echo our own frames (probe reply %s)",
+                servo_id,
+                reply.hex(" ") or "<empty>",
+            )
+            return True
+        logger.debug("servo %d: link verified clean, ambiguous frame was genuine", servo_id)
+        return False
+
+    def exchange(self, request: bytes, expect_bytes: int, *, servo_id: int) -> bytes:
+        """One write/read with no retry, for bring-up diagnostics.
+
+        Flushes stale input first (STS servos may ack writes), then returns
+        whatever arrived -- empty when nothing did. Raises ``ServoEchoError`` if
+        the reply is our own request.
+        """
+        reset = getattr(self._serial, "reset_input_buffer", None)
+        if reset is not None:
+            reset()
+        self._serial.write(request)
+        reply = self._serial.read(expect_bytes)
+        self._reject_echo(request, reply, servo_id)
+        return reply
+
+    def ping(self, servo_id: int) -> Optional[int]:
+        regs = self._require_registers("ping")
+        request = regs.encode_ping(servo_id)
+        reply = self.exchange(request, regs.status_length, servo_id=servo_id)
+        try:
+            return regs.parse_status(reply, servo_id)
+        except ServoEchoError:
+            raise
+        except RuntimeError as exc:
+            logger.debug("ping %d: %s", servo_id, exc)
+            return None
+
+    def read_register(self, servo_id: int, address: int, length: int) -> Optional[int]:
+        regs = self._require_registers("read_register")
+        request = regs.encode_read(servo_id, int(address), length)
+        reply = self.exchange(request, regs.read_reply_length(length), servo_id=servo_id)
+        try:
+            return regs.parse_read_reply(reply, servo_id, length)
+        except ServoEchoError:
+            raise
+        except RuntimeError as exc:
+            logger.debug("read_register %d @0x%02x: %s", servo_id, int(address), exc)
+            return None
+
+    def write_register(self, servo_id: int, address: int, length: int, value: int) -> None:
+        """Write a register. Whether a real STS3215 acks a write is still
+        unknown (Response Status Level, register 0x08), so any ack is left in the
+        input buffer for the next ``exchange`` to flush."""
+        regs = self._require_registers("write_register")
+        if value is None:
+            raise ValueError(
+                f"servo {servo_id}: no value to write to register "
+                f"0x{int(address):02x}. A failed read returns None -- check it "
+                "before feeding it back into a write"
+            )
+        if not 0 <= value < (1 << (8 * length)):
+            raise ValueError(
+                f"servo {servo_id}: value {value} does not fit in the "
+                f"{length}-byte register at 0x{int(address):02x}"
+            )
+        payload = regs.encode_write(servo_id, int(address), length, value)
+        self._serial.write(payload)
+        logger.debug(
+            "TX id=%d @0x%02x len=%d value=%d bytes=%s",
+            servo_id,
+            int(address),
+            length,
+            value,
+            payload.hex(" "),
+        )
 
     def set_torque(self, channel: int, enabled: bool) -> None:
         fb = self._require_feedback("set_torque")
@@ -446,12 +761,23 @@ def open_backend(
     protocol is ``"mock"``. A real connection resolves ``protocol`` to a wire
     encoder (raising on an unknown name) and requires an explicit ``port``.
     """
+    if not mock and protocol == "mock" and port:
+        # The trap: configs/arm.default.yaml ships protocol: mock, so a real
+        # --port used to be silently ignored and the mock backend would report
+        # healthy servos without a byte leaving the machine.
+        raise ValueError(
+            f"port {port} was given but the serial protocol is 'mock', so no "
+            "bytes would be sent. Pass --protocol sts3215 (or set "
+            "serial.protocol in configs/arm.default.yaml), or use --mock "
+            "without --port."
+        )
     if mock or protocol == "mock":
         return MockSerialBackend()
     encoder = get_encoder(protocol)  # validates the protocol name up front
     if not port:
         raise ValueError(
-            "no serial port given; pass --port /dev/tty.usbserial-XXXX or use --mock"
+            "no serial port given; pass --port /dev/cu.usbmodem* (run `bringup "
+            "ports` to find it) or use --mock"
         )
     return PySerialBackend(
         port=port,

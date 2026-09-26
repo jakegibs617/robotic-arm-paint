@@ -26,7 +26,24 @@ def add_connection_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--port",
         default=None,
-        help="serial port, e.g. /dev/tty.usbserial-XXXX (omit with --mock)",
+        help=(
+            "serial port, e.g. /dev/cu.usbmodem5B790320481 (omit with --mock); "
+            "use the /dev/cu.* node, not /dev/tty.*"
+        ),
+    )
+    parser.add_argument(
+        "--baud",
+        type=int,
+        default=None,
+        help="serial baud rate (default: serial.baud from the arm config)",
+    )
+    parser.add_argument(
+        "--protocol",
+        default=None,
+        help=(
+            "wire protocol, e.g. sts3215 (default: serial.protocol from the arm "
+            "config, which ships as 'mock')"
+        ),
     )
     parser.add_argument(
         "--arm-config",
@@ -45,6 +62,25 @@ def add_connection_args(parser: argparse.ArgumentParser) -> None:
         "--verbose",
         action="store_true",
         help="log every servo command",
+    )
+
+
+def resolve_serial(args, arm_cfg: ArmConfig):
+    """The serial settings actually in force: CLI flags win over the config."""
+    serial_cfg = arm_cfg.serial
+
+    def chosen(name: str, fallback):
+        # `is not None`, not `or`: a flag the user passed explicitly must win
+        # even when its value is falsy (--probe-timeout 0 is valid pyserial).
+        value = getattr(args, name, None)
+        return fallback if value is None else value
+
+    return serial_cfg.model_copy(
+        update={
+            "port": chosen("port", serial_cfg.port),
+            "baud": chosen("baud", serial_cfg.baud),
+            "protocol": chosen("protocol", serial_cfg.protocol),
+        }
     )
 
 

@@ -1,34 +1,247 @@
 """Hardware bring-up helpers.
 
-``list-joints``, ``protocols``, and ``mock-session`` inspect configuration and
-protocol capabilities without opening a serial port. ``ping`` and ``assign-id``
-open a real connection (or the mock backend with ``--mock``) to read servo
-positions or reassign a bus ID.
+``list-joints``, ``protocols``, ``ports``, and ``mock-session`` inspect
+configuration, protocol capabilities, and the host's serial devices without
+opening a port. ``scan``, ``identify``, ``ping``, ``nudge``, and ``assign-id``
+open a connection -- a real one, or the in-memory fake with ``--mock``.
+
+The intended order on a fresh build is ``ports`` -> ``scan`` -> ``identify`` ->
+``nudge`` -> ``assign-id``: find the adapter, find out what is actually on the
+bus before trusting the config's servo IDs, read the servo's own account of
+itself, prove the write path with the smallest possible move, and only then
+write to EEPROM.
 """
 
 from __future__ import annotations
 
 import argparse
+import sys
 
-from painterbot.apps._common import add_connection_args, load_configs, setup_logging
+from painterbot.apps._common import (
+    add_connection_args,
+    load_configs,
+    resolve_serial,
+    setup_logging,
+)
+from painterbot.control import serial_link
+from painterbot.control.bus_scan import (
+    DEFAULT_BAUDS,
+    check_servo_id,
+    identify_servo,
+    scan_bus,
+    servo_ids_from_spec,
+    sweep_bauds,
+)
 from painterbot.control.id_assignment import assign_servo_id
+from painterbot.control.motion_probe import DEFAULT_NUDGE_COUNTS, nudge_servo
 from painterbot.control.preflight import read_servo_preflight
-from painterbot.control.serial_controller import get_feedback, open_backend
+from painterbot.control.serial_controller import (
+    PySerialBackend,
+    ServoEchoError,
+    get_encoder,
+    get_feedback,
+    open_backend,
+)
+
+
+_PROBE_PROTOCOL = "sts3215"
+#: Short per-probe timeout: a wide sweep at the config's 1.0s would be unusable
+#: (an absent ID costs the full timeout, a real reply arrives in microseconds).
+_PROBE_TIMEOUT_S = 0.05
 
 
 def _feedback_text(protocol: str) -> str:
     return "yes" if get_feedback(protocol) is not None else "no"
 
 
-def _open_raw_backend(args, arm_cfg):
+def _open_raw_backend(args, arm_cfg, *, timeout_s=None):
     """A raw ``SerialBackend`` (not an ``Arm``) for protocol-level bring-up ops."""
+    serial_cfg = resolve_serial(args, arm_cfg)
     return open_backend(
         mock=args.mock,
-        port=args.port or arm_cfg.serial.port,
-        baud=arm_cfg.serial.baud,
-        timeout_s=arm_cfg.serial.timeout_s,
-        protocol=arm_cfg.serial.protocol,
+        port=serial_cfg.port,
+        baud=serial_cfg.baud,
+        timeout_s=timeout_s or serial_cfg.timeout_s,
+        protocol=serial_cfg.protocol,
     )
+
+
+def _simulated_bus(*, empty: bool):
+    """A real ``PySerialBackend`` over the in-memory fake servo.
+
+    ``--mock`` for the scan/identify/nudge subcommands deliberately does **not**
+    use ``MockSerialBackend``: the point of these commands is the wire protocol,
+    so the mock path runs the real sts3215 encoders and parsers against a fake
+    port. A backend that invented a model number would prove nothing.
+    """
+    from painterbot.testing.fake_sts3215 import FakeSTS3215Serial, SimulatedServo
+
+    servos = {} if empty else {1: SimulatedServo(position_counts=2048)}
+    return PySerialBackend(
+        "mock://fake-servo-bus",
+        encoder=get_encoder(_PROBE_PROTOCOL),
+        feedback=get_feedback(_PROBE_PROTOCOL),
+        serial_obj=FakeSTS3215Serial(servos),
+    )
+
+
+def _open_probe_bus(args, arm_cfg, *, baud=None, timeout_s=None):
+    """A register-level bus for the probing subcommands, plus what it connected to."""
+    if args.mock:
+        resolved = resolve_serial(args, arm_cfg)
+        serial_cfg = resolved.model_copy(
+            update={
+                "protocol": _PROBE_PROTOCOL,
+                "port": "mock://fake-servo-bus",
+                "baud": baud if baud is not None else resolved.baud,
+                "timeout_s": _PROBE_TIMEOUT_S if timeout_s is None else timeout_s,
+            }
+        )
+        return _simulated_bus(empty=args.mock_empty_bus), serial_cfg
+
+    resolved = resolve_serial(args, arm_cfg)
+    if resolved.protocol == "mock":
+        raise _UsageError(
+            "this command speaks to a servo over the wire, but the serial "
+            f"protocol is 'mock' (port={resolved.port}). Pass --protocol "
+            "sts3215 --port /dev/cu.usbmodem* (see `bringup ports`), or use "
+            "--mock to run against the in-memory fake servo bus."
+        )
+    serial_cfg = resolved.model_copy(
+        update={
+            "baud": baud if baud is not None else resolved.baud,
+            "timeout_s": _PROBE_TIMEOUT_S if timeout_s is None else timeout_s,
+        }
+    )
+    bus = open_backend(
+        mock=False,
+        port=serial_cfg.port,
+        baud=serial_cfg.baud,
+        timeout_s=serial_cfg.timeout_s,
+        protocol=serial_cfg.protocol,
+    )
+    return bus, serial_cfg
+
+
+def _print_connection(serial_cfg, *, mock: bool) -> None:
+    note = " (mock: in-memory fake servo bus, nothing is sent to hardware)" if mock else ""
+    print(
+        f"connecting: port={serial_cfg.port} baud={serial_cfg.baud} "
+        f"protocol={serial_cfg.protocol} timeout={serial_cfg.timeout_s}s{note}"
+    )
+
+
+class _UsageError(Exception):
+    """A mistake in how the command was invoked -- report it, don't traceback."""
+
+
+def _guard(handler):
+    """Turn the two failures an operator can actually act on into exit codes.
+
+    A usage mistake exits 2; an echoing link exits 1 with its diagnosis. Both
+    used to reach the terminal as a traceback.
+    """
+
+    def run(args) -> int:
+        try:
+            return handler(args)
+        except _UsageError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        except ValueError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        except ServoEchoError as exc:
+            print(f"  {exc}")
+            return 1
+
+    return run
+
+
+def _resolve_ids(spec):
+    try:
+        return servo_ids_from_spec(spec), None
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return None, 2
+
+
+def _print_ports(args) -> int:
+    print(serial_link.describe_ports(serial_link.list_serial_ports()))
+    return 0
+
+
+def _print_scan(args) -> int:
+    servo_ids, failure = _resolve_ids(args.ids)
+    if failure is not None:
+        return failure
+    arm_cfg, _ = load_configs(args)
+
+    if args.baud_sweep:
+        base = resolve_serial(args, arm_cfg)
+        print(f"sweeping bauds on {base.port or '<no port>'} for IDs {args.ids}")
+
+        def open_bus_at(baud):
+            bus, serial_cfg = _open_probe_bus(
+                args, arm_cfg, baud=baud, timeout_s=args.probe_timeout
+            )
+            _print_connection(serial_cfg, mock=args.mock)
+            return bus
+
+        sweep = sweep_bauds(
+            open_bus_at, servo_ids=servo_ids, bauds=DEFAULT_BAUDS
+        )
+        print(sweep.describe())
+        return 0 if sweep.answered_at is not None else 1
+
+    bus, serial_cfg = _open_probe_bus(args, arm_cfg, timeout_s=args.probe_timeout)
+    _print_connection(serial_cfg, mock=args.mock)
+    try:
+        scan = scan_bus(bus, servo_ids, baud=serial_cfg.baud)
+    finally:
+        bus.close()
+    print(scan.describe())
+    return 0 if not scan.is_empty else 1
+
+
+def _print_identify(args) -> int:
+    check_servo_id(args.id)
+    arm_cfg, _ = load_configs(args)
+    bus, serial_cfg = _open_probe_bus(args, arm_cfg, timeout_s=args.probe_timeout)
+    _print_connection(serial_cfg, mock=args.mock)
+    try:
+        identity = identify_servo(bus, args.id)
+    finally:
+        bus.close()
+    if identity is None:
+        print(f"servo {args.id} did not answer at {serial_cfg.baud} baud")
+        return 1
+    print(f"  {identity.summary()}")
+    if identity.angle_limits_counts is not None:
+        low, high = identity.angle_limits_counts
+        print(f"  angle limits: {low}..{high} counts")
+    return 0
+
+
+def _print_nudge(args) -> int:
+    check_servo_id(args.id)
+    arm_cfg, _ = load_configs(args)
+    bus, serial_cfg = _open_probe_bus(args, arm_cfg, timeout_s=args.probe_timeout)
+    _print_connection(serial_cfg, mock=args.mock)
+    print(
+        f"keep the horn clear: commanding servo {args.id} by "
+        f"{args.counts:+d} counts from wherever it sits"
+    )
+    try:
+        result = nudge_servo(
+            bus, args.id, delta_counts=args.counts, settle_s=args.settle
+        )
+    finally:
+        bus.close()
+    print(f"  {result.summary()}")
+    if not result.torque_released and result.start_counts is not None:
+        print("  WARNING: torque may still be enabled")
+    return 0 if result.ok else 1
 
 
 def _print_joint_table(args) -> None:
@@ -63,6 +276,11 @@ def _print_ping(args) -> None:
             print(f"  {result.servo_id}: {joint.name:12s} [{marker}] {result.detail}")
         ok_count = sum(r.ok for r in results)
         print(f"{ok_count}/{len(results)} servos responded")
+        # Non-zero on a real bus so the powered checklist is scriptable, like
+        # scan/identify/nudge. Under --mock there is no hardware to judge: the
+        # mock backend reports None for any servo never commanded, which is a
+        # property of the mock rather than a fault.
+        return 0 if args.mock or ok_count == len(results) else 1
     finally:
         backend.close()
 
@@ -110,7 +328,18 @@ def build_parser() -> argparse.ArgumentParser:
         description="Mock-safe servo bus bring-up inspection tools."
     )
     add_connection_args(parser)
+    parser.add_argument(
+        "--mock-empty-bus",
+        action="store_true",
+        help="with --mock, simulate a bus where nothing answers (an unpowered bus)",
+    )
     sub = parser.add_subparsers(dest="command")
+
+    ports_parser = sub.add_parser(
+        "ports",
+        help="list the host's serial devices and flag the likely servo adapter",
+    )
+    ports_parser.set_defaults(func=_print_ports)
 
     list_parser = sub.add_parser(
         "list-joints",
@@ -142,6 +371,68 @@ def build_parser() -> argparse.ArgumentParser:
     )
     assign_id_parser.set_defaults(func=_print_assign_id)
 
+    scan_parser = sub.add_parser(
+        "scan",
+        help="probe a range of bus IDs and report every servo that answers",
+    )
+    scan_parser.add_argument(
+        "--ids",
+        default="0-11",
+        help="IDs to probe, e.g. '1', '0-5' or '0-2,7' (default: 0-11)",
+    )
+    scan_parser.add_argument(
+        "--baud-sweep",
+        action="store_true",
+        help="retry the scan at each candidate baud until something answers",
+    )
+    scan_parser.add_argument(
+        "--probe-timeout",
+        type=float,
+        default=_PROBE_TIMEOUT_S,
+        help=(
+            "seconds to wait per probe (default: %(default)s); an absent ID costs "
+            "the full timeout, so 254 IDs takes about 254x this"
+        ),
+    )
+    scan_parser.set_defaults(func=_guard(_print_scan))
+
+    identify_parser = sub.add_parser(
+        "identify",
+        help="read one servo's model, firmware, position, voltage and temperature",
+    )
+    identify_parser.add_argument("--id", type=int, required=True, help="the servo's bus ID")
+    identify_parser.add_argument(
+        "--probe-timeout", type=float, default=_PROBE_TIMEOUT_S, help=argparse.SUPPRESS
+    )
+    identify_parser.set_defaults(func=_guard(_print_identify))
+
+    nudge_parser = sub.add_parser(
+        "nudge",
+        help="move one servo a small, capped number of encoder counts and read it back",
+    )
+    nudge_parser.add_argument("--id", type=int, required=True, help="the servo's bus ID")
+    nudge_parser.add_argument(
+        "--counts",
+        type=int,
+        default=DEFAULT_NUDGE_COUNTS,
+        help=(
+            "encoder counts to move from the current position (default: "
+            "%(default)s, about 5 degrees; 4096 counts = 360 degrees). 0 is "
+            "useful on its own: it exercises torque and the read path without "
+            "commanding motion"
+        ),
+    )
+    nudge_parser.add_argument(
+        "--settle",
+        type=float,
+        default=0.5,
+        help="seconds to wait before reading the position back (default: %(default)s)",
+    )
+    nudge_parser.add_argument(
+        "--probe-timeout", type=float, default=_PROBE_TIMEOUT_S, help=argparse.SUPPRESS
+    )
+    nudge_parser.set_defaults(func=_guard(_print_nudge))
+
     session_parser = sub.add_parser(
         "mock-session",
         help="print a repeatable no-hardware workflow transcript",
@@ -168,8 +459,9 @@ def main(argv=None) -> int:
     if args.command is None:
         args.command = "list-joints"
         args.func = _print_joint_table
-    args.func(args)
-    return 0
+    # Handlers that diagnose hardware return an exit code so the powered
+    # bring-up checklist can be scripted; the inspection ones return None -> 0.
+    return int(args.func(args) or 0)
 
 
 if __name__ == "__main__":

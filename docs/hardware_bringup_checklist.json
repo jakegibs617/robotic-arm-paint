@@ -1,149 +1,289 @@
 {
-  "version": 1,
-  "project": "painterbot",
-  "purpose": "Machine-trackable checklist for the first physical hardware session.",
-  "status_values": ["todo", "in_progress", "done", "blocked", "skipped"],
-  "sources": [
-    "docs/hardware_identification.md",
-    "docs/calibration.md"
-  ],
-  "items": [
-    {
-      "id": "HW-POWER-001",
-      "title": "Verify external servo power supply",
-      "status": "todo",
-      "hardware_required": true,
-      "category": "power",
-      "source": "docs/hardware_identification.md#bring-up-checklist-do-in-order-one-servo-at-a-time",
-      "expected": {
-        "voltage_v_nominal": 7.4,
-        "supply_current_a_min": 5,
-        "usb_only_allowed": false
-      },
-      "record": {
-        "measured_voltage_v": null,
-        "supply_rating_a": null,
-        "power_switch_location": null,
-        "notes": null
-      }
-    },
-    {
-      "id": "HW-SERIAL-001",
-      "title": "Identify FE-URT-2 serial adapter on macOS",
-      "status": "todo",
-      "hardware_required": true,
-      "category": "serial",
-      "source": "docs/hardware_identification.md#serial-connection",
-      "expected": {
-        "device_globs": ["/dev/tty.usbserial-*", "/dev/tty.wchusbserial*"],
-        "usb_chip_family": "CH34x"
-      },
-      "record": {
-        "system_profiler_name": null,
-        "serial_port": null,
-        "driver_installed": null,
-        "notes": null
-      }
-    },
-    {
-      "id": "HW-SERIAL-002",
-      "title": "Confirm STS3215 baud and protocol",
-      "status": "todo",
-      "hardware_required": true,
-      "category": "serial",
-      "source": "docs/hardware_identification.md#serial-connection",
-      "expected": {
-        "baud": 1000000,
-        "protocol": "sts3215",
-        "config_file": "configs/arm.default.yaml"
-      },
-      "record": {
-        "configured_port": null,
-        "configured_baud": null,
-        "configured_protocol": null,
-        "notes": null
-      }
-    },
-    {
-      "id": "HW-ID-001",
-      "title": "Assign servo IDs to match config channels",
-      "status": "todo",
-      "hardware_required": true,
-      "category": "servo_ids",
-      "source": "docs/hardware_identification.md#bring-up-checklist-do-in-order-one-servo-at-a-time",
-      "expected": {
-        "connect_one_servo_at_a_time": true,
-        "ids": {
-          "base": 0,
-          "shoulder": 1,
-          "elbow": 2,
-          "wrist_pitch": 3,
-          "wrist_roll": 4,
-          "gripper": 5
-        }
-      },
-      "record": {
-        "assigned_ids_verified": false,
-        "tool_used": null,
-        "notes": null
-      }
-    },
-    {
-      "id": "HW-PING-001",
-      "title": "Ping/read every configured servo",
-      "status": "todo",
-      "hardware_required": true,
-      "category": "feedback",
-      "source": "docs/hardware_identification.md#bring-up-checklist-do-in-order-one-servo-at-a-time",
-      "expected": {
-        "position_feedback_required": true,
-        "servo_ids": [0, 1, 2, 3, 4, 5]
-      },
-      "record": {
-        "successful_ids": [],
-        "failed_ids": [],
-        "notes": null
-      }
-    },
-    {
-      "id": "HW-RANGE-001",
-      "title": "Measure safe servo ranges",
-      "status": "todo",
-      "hardware_required": true,
-      "category": "safe_ranges",
-      "source": "docs/hardware_identification.md#safe-servo-ranges",
-      "expected": {
-        "copy_results_to": "configs/arm.default.yaml",
-        "joints": ["base", "shoulder", "elbow", "wrist_pitch", "wrist_roll", "gripper"]
-      },
-      "record": {
-        "ranges_deg": {
-          "base": {"min": null, "max": null, "home": null},
-          "shoulder": {"min": null, "max": null, "home": null},
-          "elbow": {"min": null, "max": null, "home": null},
-          "wrist_pitch": {"min": null, "max": null, "home": null},
-          "wrist_roll": {"min": null, "max": null, "home": null},
-          "gripper": {"min": null, "max": null, "home": null}
-        },
-        "notes": null
-      }
-    },
-    {
-      "id": "HW-CAL-001",
-      "title": "Capture required drawing calibration poses",
-      "status": "todo",
-      "hardware_required": true,
-      "category": "calibration",
-      "source": "docs/calibration.md#mvp-manual-pose-calibration-phase-5",
-      "expected": {
-        "save_to": "configs/workspace.calibrated.yaml",
-        "poses": ["home", "pen_up", "pen_down", "corner_bl", "corner_br", "corner_tl", "corner_tr"]
-      },
-      "record": {
-        "captured_poses": [],
-        "used_hand_guided_capture": null,
-        "notes": null
-      }
+ "version": 1,
+ "project": "painterbot",
+ "purpose": "Machine-trackable checklist for the first physical hardware session.",
+ "status_values": [
+  "todo",
+  "in_progress",
+  "done",
+  "blocked",
+  "skipped"
+ ],
+ "sources": [
+  "docs/hardware_identification.md",
+  "docs/calibration.md"
+ ],
+ "items": [
+  {
+   "id": "HW-POWER-001",
+   "title": "Verify external servo power supply",
+   "status": "in_progress",
+   "hardware_required": true,
+   "category": "power",
+   "source": "docs/hardware_identification.md#bring-up-checklist-do-in-order-one-servo-at-a-time",
+   "expected": {
+    "voltage_v_nominal": 7.4,
+    "supply_current_a_min": 5,
+    "usb_only_allowed": false,
+    "servo_protection_window_v": [
+     4.0,
+     8.0
+    ],
+    "lipo_2s_full_charge_exceeds_limit": true
+   },
+   "record": {
+    "measured_voltage_v": 4.3,
+    "supply_rating_a": null,
+    "power_switch_location": null,
+    "notes": "USB power only so far. Surprise: THIS FE-URT-2 unit passes USB 5V to the servo bus (one unit, one revision -- not verified as general to the family) -- the servo answers fully at 4.3V, so a silent bus is not the symptom of a missing supply and 'it answered' does not mean the supply is adequate. Below the 6-8.4V spec: no motion commanded. 7.4V >=5A still required. Servo's own voltage protection registers read 4.0-8.0 V (0x0f/0x0e), which is why it boots on USB. NOTE 8.0 V not 8.4: a freshly charged 2S LiPo exceeds the servo's own limit -- use a bench supply at 7.4 V."
+   }
+  },
+  {
+   "id": "HW-SERIAL-001",
+   "title": "Identify FE-URT-2 serial adapter on macOS",
+   "status": "done",
+   "hardware_required": true,
+   "category": "serial",
+   "source": "docs/hardware_identification.md#serial-connection",
+   "expected": {
+    "device_globs": [
+     "/dev/cu.usbmodem*",
+     "/dev/cu.usbserial-*",
+     "/dev/cu.wchusbserial*"
+    ],
+    "usb_chip_family": "WCH CH343/CH9102",
+    "usb_vid": 6790,
+    "usb_pid": 21971,
+    "use_callout_node": true,
+    "note": "open /dev/cu.*, never /dev/tty.* (tty blocks on carrier detect)"
+   },
+   "record": {
+    "system_profiler_name": "USB Single Serial",
+    "serial_port": "/dev/cu.usbmodem5B790320481",
+    "driver_installed": false,
+    "notes": "macOS built-in CDC-ACM driver; no WCH vendor driver needed. Measured 2026-09-26 via `bringup ports`."
+   }
+  },
+  {
+   "id": "HW-SERIAL-002",
+   "title": "Confirm STS3215 baud and protocol",
+   "status": "done",
+   "hardware_required": true,
+   "category": "serial",
+   "source": "docs/hardware_identification.md#serial-connection",
+   "expected": {
+    "baud": 1000000,
+    "protocol": "sts3215",
+    "config_file": "configs/arm.default.yaml"
+   },
+   "record": {
+    "configured_port": "/dev/cu.usbmodem5B790320481",
+    "configured_baud": 1000000,
+    "configured_protocol": "sts3215",
+    "notes": "1 Mbps confirmed applied on macOS CDC-ACM (pyserial IOSSIOSPEED path). Passed via --baud/--protocol flags; configs/arm.default.yaml intentionally still ships protocol: mock."
+   }
+  },
+  {
+   "id": "HW-ID-001",
+   "title": "Assign servo IDs to match config channels",
+   "status": "todo",
+   "hardware_required": true,
+   "category": "servo_ids",
+   "source": "docs/hardware_identification.md#bring-up-checklist-do-in-order-one-servo-at-a-time",
+   "expected": {
+    "connect_one_servo_at_a_time": true,
+    "ids": {
+     "base": 0,
+     "shoulder": 1,
+     "elbow": 2,
+     "wrist_pitch": 3,
+     "wrist_roll": 4,
+     "gripper": 5
     }
-  ]
+   },
+   "record": {
+    "assigned_ids_verified": false,
+    "tool_used": null,
+    "notes": null
+   }
+  },
+  {
+   "id": "HW-PING-001",
+   "title": "Ping/read every configured servo",
+   "status": "in_progress",
+   "hardware_required": true,
+   "category": "feedback",
+   "source": "docs/hardware_identification.md#bring-up-checklist-do-in-order-one-servo-at-a-time",
+   "expected": {
+    "position_feedback_required": true,
+    "servo_ids": [
+     0,
+     1,
+     2,
+     3,
+     4,
+     5
+    ]
+   },
+   "record": {
+    "successful_ids": [
+     1
+    ],
+    "failed_ids": [
+     0,
+     2,
+     3,
+     4,
+     5
+    ],
+    "notes": "Factory ID 1 only, as expected -- IDs 0-40 scanned, one answer. Reads verified; IDs not yet reassigned to 0-5."
+   }
+  },
+  {
+   "id": "HW-RANGE-001",
+   "title": "Measure safe servo ranges",
+   "status": "todo",
+   "hardware_required": true,
+   "category": "safe_ranges",
+   "source": "docs/hardware_identification.md#safe-servo-ranges",
+   "expected": {
+    "copy_results_to": "configs/arm.default.yaml",
+    "joints": [
+     "base",
+     "shoulder",
+     "elbow",
+     "wrist_pitch",
+     "wrist_roll",
+     "gripper"
+    ]
+   },
+   "record": {
+    "ranges_deg": {
+     "base": {
+      "min": null,
+      "max": null,
+      "home": null
+     },
+     "shoulder": {
+      "min": null,
+      "max": null,
+      "home": null
+     },
+     "elbow": {
+      "min": null,
+      "max": null,
+      "home": null
+     },
+     "wrist_pitch": {
+      "min": null,
+      "max": null,
+      "home": null
+     },
+     "wrist_roll": {
+      "min": null,
+      "max": null,
+      "home": null
+     },
+     "gripper": {
+      "min": null,
+      "max": null,
+      "home": null
+     }
+    },
+    "notes": null
+   }
+  },
+  {
+   "id": "HW-CAL-001",
+   "title": "Capture required drawing calibration poses",
+   "status": "todo",
+   "hardware_required": true,
+   "category": "calibration",
+   "source": "docs/calibration.md#mvp-manual-pose-calibration-phase-5",
+   "expected": {
+    "save_to": "configs/workspace.calibrated.yaml",
+    "poses": [
+     "home",
+     "pen_up",
+     "pen_down",
+     "corner_bl",
+     "corner_br",
+     "corner_tl",
+     "corner_tr"
+    ]
+   },
+   "record": {
+    "captured_poses": [],
+    "used_hand_guided_capture": null,
+    "notes": null
+   }
+  },
+  {
+   "id": "HW-SCAN-001",
+   "title": "Scan the bus and identify every servo that answers",
+   "status": "done",
+   "hardware_required": true,
+   "category": "discovery",
+   "source": "docs/hardware_identification.md#bring-up-checklist-do-in-order-one-servo-at-a-time",
+   "expected": {
+    "command": "bringup --port <dev> --protocol sts3215 --baud 1000000 scan --ids 0-11",
+    "factory_id": 1,
+    "factory_baud": 1000000,
+    "model_number": 777,
+    "adapter_echo_expected": false
+   },
+   "record": {
+    "answered_ids": [
+     1
+    ],
+    "model_number": 777,
+    "firmware": "3.10",
+    "voltage_v": 4.3,
+    "temperature_c": 26,
+    "position_counts": 4093,
+    "angle_limits_counts": [
+     0,
+     4095
+    ],
+    "error_flags": 0,
+    "adapter_echo_observed": false,
+    "notes": "Measured 2026-09-26 on USB power only. Model 777 = MODEL_L 9 + MODEL_H 3*256, confirming STS3215. Read path (PING, register reads, framing, checksums, little-endian decode) verified against real hardware for the first time. Full read-only register dump also showed: torque off at rest, a STALE Goal_Position of 0 while sitting at 4094 counts (enabling torque in that state would command a near-full-turn slam -- motion_probe now overwrites the goal with the current position before energising), and Response Status Level 1 (the servo acks every write). Measured directly: a Goal_Position write that DIFFERS from the present position implicitly enables torque (0 -> 1), while a write equal to the present position does not. A goal write is the act of energising; nothing can pre-stage a goal without committing to motion.",
+    "torque_enable_at_rest": 0,
+    "goal_position_at_rest": 0,
+    "response_status_level": 1,
+    "operating_mode": 0,
+    "voltage_protection_window_v": [
+     4.0,
+     8.0
+    ],
+    "temperature_limit_c": 70,
+    "max_torque_limit": 1000,
+    "goal_write_implicitly_enables_torque": true
+   }
+  },
+  {
+   "id": "HW-MOTION-001",
+   "title": "Prove the write path with a bounded motion probe",
+   "status": "blocked",
+   "hardware_required": true,
+   "category": "motion",
+   "source": "docs/hardware_identification.md#bring-up-checklist-do-in-order-one-servo-at-a-time",
+   "expected": {
+    "command": "bringup --port <dev> --protocol sts3215 nudge --id 1 --counts 0 then --counts 57",
+    "max_delta_counts": 200,
+    "start_with_zero_delta": true,
+    "requires_voltage_v": 7.4,
+    "neutralise_stale_goal_before_torque": true,
+    "goal_write_implicitly_enables_torque": true
+   },
+   "record": {
+    "zero_delta_status": null,
+    "requested_delta_counts": null,
+    "achieved_delta_counts": null,
+    "counts_to_motion_sign": null,
+    "torque_released": null,
+    "notes": "Blocked on 7.4V: the bench servo reads 4.3V on USB power, below the 6-8.4V spec. Commanding torque or motion under-voltage risks a brownout, so nothing has been commanded to move."
+   }
+  }
+ ]
 }

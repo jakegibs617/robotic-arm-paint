@@ -2,6 +2,7 @@ import pytest
 
 from painterbot.control.serial_controller import (
     MockSerialBackend,
+    ServoRegister,
     PySerialBackend,
     available_protocols,
     get_encoder,
@@ -385,3 +386,89 @@ def test_stop_blocks_motion(mock_arm):
 def test_pose_wrong_length_rejected(mock_arm):
     with pytest.raises(ValueError):
         mock_arm.move_to_pose([90, 90, 90])
+
+
+# -- register-level access (bus scan / identification) ------------------------
+
+
+def test_sts3215_register_access_encodes_ping_and_reads():
+    fb = get_feedback("sts3215")
+    regs = fb.registers
+    assert regs is not None
+    # PING (instruction 0x01) carries no params: FF FF ID LEN INSTR CHK.
+    assert regs.encode_ping(1) == bytes([0xFF, 0xFF, 0x01, 0x02, 0x01, 0xFB])
+    # A generic register read must reproduce the hand-written position read.
+    assert regs.encode_read(1, ServoRegister.PRESENT_POSITION, 2) == bytes(
+        [0xFF, 0xFF, 0x01, 0x04, 0x02, 0x38, 0x02, 0xBE]
+    )
+    # Model number lives at 0x03 and is 2 bytes wide.
+    assert regs.encode_read(1, ServoRegister.MODEL, 2) == bytes(
+        [0xFF, 0xFF, 0x01, 0x04, 0x02, 0x03, 0x02, 0xF3]
+    )
+
+
+def test_sts3215_register_access_encodes_writes_little_endian():
+    regs = get_feedback("sts3215").registers
+    # 1-byte write reproduces the hand-written torque packet.
+    assert regs.encode_write(1, ServoRegister.TORQUE_ENABLE, 1, 1) == bytes(
+        [0xFF, 0xFF, 0x01, 0x04, 0x03, 0x28, 0x01, 0xCE]
+    )
+    # 2-byte write is low byte first: 2048 -> 00 08.
+    assert regs.encode_write(1, ServoRegister.GOAL_POSITION, 2, 2048) == bytes(
+        [0xFF, 0xFF, 0x01, 0x05, 0x03, 0x2A, 0x00, 0x08, 0xC4]
+    )
+
+
+def test_sts3215_register_access_parses_replies():
+    regs = get_feedback("sts3215").registers
+    assert regs.status_length == 6
+    assert regs.read_reply_length(1) == 7
+    assert regs.read_reply_length(2) == 8
+    # Bare ack to a ping: error flags come back as an int.
+    assert regs.parse_status(bytes([0xFF, 0xFF, 0x01, 0x02, 0x00, 0xFC]), 1) == 0
+    # 2-byte read reply, little-endian.
+    assert (
+        regs.parse_read_reply(bytes([0xFF, 0xFF, 0x01, 0x04, 0x00, 0x00, 0x08, 0xF2]), 1, 2)
+        == 2048
+    )
+    # 1-byte read reply (e.g. present temperature = 74 C).
+    assert regs.parse_read_reply(bytes([0xFF, 0xFF, 0x01, 0x03, 0x00, 0x4A, 0xB1]), 1, 1) == 74
+
+
+def test_sts3215_register_replies_reject_corrupt_frames():
+    regs = get_feedback("sts3215").registers
+    with pytest.raises(RuntimeError, match="no/short"):
+        regs.parse_read_reply(b"\xff\xff\x01", 1, 2)
+    with pytest.raises(RuntimeError, match="checksum"):
+        regs.parse_read_reply(bytes([0xFF, 0xFF, 0x01, 0x04, 0x00, 0x00, 0x08, 0x00]), 1, 2)
+    with pytest.raises(RuntimeError, match="came from ID"):
+        regs.parse_read_reply(bytes([0xFF, 0xFF, 0x02, 0x04, 0x00, 0x00, 0x08, 0xF1]), 1, 2)
+
+
+def test_servo_register_addresses_match_feetech_memory_map():
+    # Datasheet-derived; the names are what callers outside the serial module use.
+    assert ServoRegister.FIRMWARE == 0x00
+    assert ServoRegister.MODEL == 0x03
+    assert ServoRegister.ID == 0x05
+    assert ServoRegister.BAUD_CODE == 0x06
+    assert ServoRegister.MIN_ANGLE_LIMIT == 0x09
+    assert ServoRegister.MAX_ANGLE_LIMIT == 0x0B
+    assert ServoRegister.TORQUE_ENABLE == 0x28
+    assert ServoRegister.GOAL_POSITION == 0x2A
+    assert ServoRegister.LOCK == 0x37
+    assert ServoRegister.PRESENT_POSITION == 0x38
+    assert ServoRegister.PRESENT_VOLTAGE == 0x3E
+    assert ServoRegister.PRESENT_TEMPERATURE == 0x3F
+
+
+def test_open_backend_refuses_a_real_port_when_the_protocol_is_mock():
+    # The trap this closes: configs/arm.default.yaml still ships protocol: mock,
+    # so `bringup ping --port /dev/cu.X` used to talk to the mock backend and
+    # report healthy servos without sending a single byte.
+    with pytest.raises(ValueError, match="protocol is 'mock'"):
+        open_backend(port="/dev/cu.usbmodem1", protocol="mock")
+
+
+def test_open_backend_still_mocks_when_no_port_is_given():
+    assert open_backend(protocol="mock").is_mock
+    assert open_backend(mock=True, port="/dev/cu.usbmodem1").is_mock
