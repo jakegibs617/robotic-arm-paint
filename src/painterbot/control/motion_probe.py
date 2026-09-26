@@ -13,6 +13,12 @@ Safety properties, in order of how much they matter:
 * The delta is capped before any byte reaches the bus, so a bring-up typo cannot
   swing a mounted arm.
 * The start position must be readable, so a servo is never commanded blind.
+* The stale goal is neutralised *before* torque is enabled. This one is not
+  theoretical: the bench STS3215 was found sitting at 4094 counts with
+  Goal_Position still at its factory 0. Enabling torque in that state commands a
+  near-full-turn slam to 0 before any deliberate goal is sent, which on a
+  mounted arm is a collision. So the goal register is overwritten with the
+  servo's current position while it is still limp.
 * The goal is clamped into the encoder range.
 * Torque is released in a ``finally``, so a failure cannot leave the servo
   energised.
@@ -134,6 +140,9 @@ def nudge_servo(
     failure: Optional[str] = None
     released = False
     try:
+        # Neutralise whatever goal the servo is still holding before giving it
+        # the power to chase it (see the module docstring).
+        bus.write_register(servo_id, ServoRegister.GOAL_POSITION, 2, start)
         bus.set_torque(servo_id, True)
         bus.write_register(servo_id, ServoRegister.GOAL_POSITION, 2, goal)
         sleep(settle_s)

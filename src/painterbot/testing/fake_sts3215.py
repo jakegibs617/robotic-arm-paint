@@ -26,15 +26,25 @@ Confirmed against a physical STS3215 on 2026-09-26 (bus powered from USB only,
 * Model number is 777 (MODEL_L=9, MODEL_H=3), firmware 3.10, factory ID 1 at
   1,000,000 baud, angle limits 0..4095 counts. The defaults below match.
 * No adapter echo on this FE-URT-2.
+* **Response Status Level (0x08) is 1: the servo acks every write.** Those acks
+  land in the input buffer between operations, which is why every read flushes
+  before pairing request and reply. Tests that set ``ack_writes=True`` cover it.
+* At rest the servo reports ``TORQUE_ENABLE=0`` and a **stale
+  ``GOAL_POSITION`` of 0** while sitting at 4094 counts -- so enabling torque
+  without first overwriting the goal commands a near-full-turn slam. See
+  ``painterbot.control.motion_probe``.
+* Its own voltage protection window is 4.0-8.0 V (0x0f/0x0e), which is why it
+  boots at all on USB. Note 8.0 V, not 8.4: a freshly charged 2S LiPo is over
+  the servo's own limit.
+* Operating mode 0 (position), max torque limit 1000, max temperature limit
+  70 C.
 
 Still unknown:
-* Whether a real STS3215 acks writes at all (Response Status Level, register
-  0x08). ``ack_writes`` defaults to ``False`` -- the conservative assumption the
-  rest of the suite was written under. Flip it once a bench servo proves acks
-  arrive, do not assume it.
 * Everything about the write path: torque enable, goal position, and the sign
   and scale of the counts-to-motion mapping. The bench servo was under-voltage
-  (4.3 V against a 6-8.4 V spec), so nothing has been commanded to move.
+  (4.3 V, against 6 V minimum for operation), so nothing has been commanded to
+  move. ``ack_writes`` still defaults to ``False`` so existing tests keep their
+  simpler expectations; the real servo acks.
 * The meaning of register 0x02.
 * Exact timing around servo status packets and write acknowledgements.
 * Real error-flag combinations under low voltage, overload, or overheating --

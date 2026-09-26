@@ -96,3 +96,18 @@ def test_hardware_checklist_tracks_the_scan_and_motion_probes():
     assert by_id["HW-MOTION-001"]["status"] == "blocked"
     assert by_id["HW-MOTION-001"]["expected"]["max_delta_counts"] == 200
     assert by_id["HW-MOTION-001"]["expected"]["start_with_zero_delta"] is True
+
+
+def test_hardware_checklist_warns_that_a_full_2s_lipo_exceeds_the_servo_limit():
+    # The servo's own max-voltage protection reads 8.0V; a 2S LiPo off the
+    # charger is 8.4V. This is the kind of fact that costs a servo if it is
+    # only ever written in prose.
+    data = json.loads(
+        (REPO_ROOT / "docs" / "hardware_bringup_checklist.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    power = {item["id"]: item for item in data["items"]}["HW-POWER-001"]
+
+    assert power["expected"]["servo_protection_window_v"] == [4.0, 8.0]
+    assert power["expected"]["lipo_2s_full_charge_exceeds_limit"] is True

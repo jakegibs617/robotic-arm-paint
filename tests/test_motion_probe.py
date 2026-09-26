@@ -57,6 +57,7 @@ def test_nudge_reads_energises_commands_reads_back_then_releases():
     # release torque afterwards.
     assert _steps(fake) == [
         (READ, POSITION),
+        (WRITE, GOAL),  # neutralise the stale goal BEFORE energising
         (WRITE, TORQUE),
         (WRITE, GOAL),
         (READ, POSITION),
@@ -191,3 +192,45 @@ def test_nudge_releases_torque_when_the_end_read_fails():
 def test_max_nudge_counts_is_a_small_fraction_of_a_turn():
     # The cap exists so a bring-up typo cannot swing a mounted arm.
     assert 0 < MAX_NUDGE_COUNTS <= 256
+
+
+def test_nudge_neutralises_a_stale_goal_before_energising():
+    """A servo at rest still holds whatever Goal_Position was last written.
+
+    The bench STS3215 was found sitting at 4094 counts with Goal_Position 0 --
+    the factory default, never overwritten. Enabling torque in that state
+    commands a near-full-turn slam to 0 before any deliberate goal is sent. So
+    the goal is overwritten with the *current* position while the servo is
+    still limp, and only then is torque enabled.
+    """
+    fake = FakeSTS3215Serial({1: SimulatedServo(position_counts=4094, goal_counts=0)})
+
+    result = nudge_servo(_bus(fake), 1, delta_counts=-57, sleep=_never_sleep)
+
+    writes = [r for r in fake.requests if r.instruction == WRITE]
+    first_goal_write = next(r for r in writes if r.address == GOAL)
+    # The first thing written to the goal register is where the servo already is.
+    assert int.from_bytes(first_goal_write.payload, "little") == 4094
+    # And it happens before torque is ever enabled.
+    assert writes.index(first_goal_write) < next(
+        i for i, r in enumerate(writes) if r.address == TORQUE
+    )
+    assert result.status == "success"
+    assert result.end_counts == 4094 - 57
+
+
+def test_nudge_tolerates_a_servo_that_acks_every_write():
+    """The bench servo reports Response Status Level 1: it acks writes.
+
+    Those acks land in the input buffer between operations, so every read must
+    flush before pairing request and reply or it would read an ack as a value.
+    """
+    fake = FakeSTS3215Serial(
+        {1: SimulatedServo(position_counts=2000)}, ack_writes=True
+    )
+
+    result = nudge_servo(_bus(fake), 1, delta_counts=100, sleep=_never_sleep)
+
+    assert result.status == "success"
+    assert result.start_counts == 2000
+    assert result.end_counts == 2100

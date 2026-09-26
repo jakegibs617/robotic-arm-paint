@@ -24,13 +24,18 @@
    "expected": {
     "voltage_v_nominal": 7.4,
     "supply_current_a_min": 5,
-    "usb_only_allowed": false
+    "usb_only_allowed": false,
+    "servo_protection_window_v": [
+     4.0,
+     8.0
+    ],
+    "lipo_2s_full_charge_exceeds_limit": true
    },
    "record": {
     "measured_voltage_v": 4.3,
     "supply_rating_a": null,
     "power_switch_location": null,
-    "notes": "USB power only so far. Surprise: the FE-URT-2 DOES pass USB 5V to the servo bus -- the servo answers fully at 4.3V, so a silent bus is not the symptom of a missing supply and 'it answered' does not mean the supply is adequate. Below the 6-8.4V spec: no motion commanded. 7.4V >=5A still required."
+    "notes": "USB power only so far. Surprise: the FE-URT-2 DOES pass USB 5V to the servo bus -- the servo answers fully at 4.3V, so a silent bus is not the symptom of a missing supply and 'it answered' does not mean the supply is adequate. Below the 6-8.4V spec: no motion commanded. 7.4V >=5A still required. Servo's own voltage protection registers read 4.0-8.0 V (0x0f/0x0e), which is why it boots on USB. NOTE 8.0 V not 8.4: a freshly charged 2S LiPo exceeds the servo's own limit -- use a bench supply at 7.4 V."
    }
   },
   {
@@ -242,7 +247,17 @@
     ],
     "error_flags": 0,
     "adapter_echo_observed": false,
-    "notes": "Measured 2026-09-26 on USB power only. Model 777 = MODEL_L 9 + MODEL_H 3*256, confirming STS3215. Read path (PING, register reads, framing, checksums, little-endian decode) verified against real hardware for the first time."
+    "notes": "Measured 2026-09-26 on USB power only. Model 777 = MODEL_L 9 + MODEL_H 3*256, confirming STS3215. Read path (PING, register reads, framing, checksums, little-endian decode) verified against real hardware for the first time. Full read-only register dump also showed: torque off at rest, a STALE Goal_Position of 0 while sitting at 4094 counts (enabling torque in that state would command a near-full-turn slam -- motion_probe now overwrites the goal with the current position before energising), and Response Status Level 1 (the servo acks every write).",
+    "torque_enable_at_rest": 0,
+    "goal_position_at_rest": 0,
+    "response_status_level": 1,
+    "operating_mode": 0,
+    "voltage_protection_window_v": [
+     4.0,
+     8.0
+    ],
+    "temperature_limit_c": 70,
+    "max_torque_limit": 1000
    }
   },
   {
@@ -256,7 +271,8 @@
     "command": "bringup --port <dev> --protocol sts3215 nudge --id 1 --counts 0 then --counts 57",
     "max_delta_counts": 200,
     "start_with_zero_delta": true,
-    "requires_voltage_v": 7.4
+    "requires_voltage_v": 7.4,
+    "neutralise_stale_goal_before_torque": true
    },
    "record": {
     "zero_delta_status": null,

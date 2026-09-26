@@ -76,12 +76,41 @@ screw terminal.**
 | Present voltage | **4.3 V** | ⚠️ below the 6–8.4 V spec — see below |
 | Present temperature | 26 °C | |
 | Error flags | 0x00 | notably *not* an under-voltage flag at 4.3 V |
+| Torque enable (0x28) | **0** | limp at rest. Any stiffness by hand is the 1:345 gearbox, not holding force |
+| Goal position (0x2a) | **0** | ⚠️ stale factory value while the servo sits at 4094 — see below |
+| Response status level (0x08) | **1** | the servo **acks every write**; reads must flush first |
+| Voltage protection (0x0f/0x0e) | **4.0 – 8.0 V** | why it boots on USB at all. ⚠️ **8.0 V, not 8.4** |
+| Temperature limit (0x0d) | 70 °C | |
+| Operating mode (0x21) | 0 | position mode, not wheel mode |
+| Max torque limit (0x10) | 1000 | 100% |
+| Speed / load / current | 0 / 0 / 0 | idle, consistent with torque off |
 
-### Surprise: the FE-URT-2 does pass USB 5 V to the servo bus
+### ⚠️ A fully charged 2S LiPo exceeds this servo's own voltage limit
 
-This contradicts the assumption written into the earlier plan (and into most
-advice about these adapters). The servo's logic runs and answers fully at 4.3 V
-with USB alone — so a silent bus is **not** the expected result of a missing
+The servo's max-voltage protection register reads **8.0 V**. A 2S LiPo straight
+off the charger is **8.4 V**. Use a bench supply set to 7.4 V, or a LiPo that has
+been run down a little — and check `identify` reports a voltage inside 4.0–8.0 V
+before doing anything else.
+
+### ⚠️ Enabling torque with a stale goal is a full-turn slam
+
+The bench servo sat at **4094 counts with `Goal_Position` still 0** — the factory
+default, never overwritten. Enabling torque in that state tells the servo to
+travel nearly a full turn to reach 0, immediately, at whatever speed it can
+manage. On a mounted arm that is a collision.
+
+`motion_probe.nudge_servo` therefore overwrites `Goal_Position` with the servo's
+*current* position while it is still limp, and only then enables torque. Anything
+else that enables torque — the jog CLI, `Arm.set_torque` — has the same hazard and
+has **not** been audited for it yet.
+
+### Surprise: this FE-URT-2 passes USB 5 V to the servo bus
+
+This contradicts the assumption written into the earlier plan. It is an
+observation about *this* adapter and servo, not a general truth about the
+FE-URT-2 family — but the mechanism is clear enough: the servo's own
+under-voltage protection is set to 4.0 V, so 4.3 V clears it. The logic runs and
+answers fully at 4.3 V with USB alone — so a silent bus is **not** the expected result of a missing
 supply, and "it answered" does **not** mean the supply is adequate. Always read
 the voltage: 4.3 V means USB-only.
 
