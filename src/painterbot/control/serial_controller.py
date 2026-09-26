@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from enum import IntEnum
 from typing import Callable, Optional, Protocol
 
 logger = logging.getLogger("painterbot.serial")
@@ -107,14 +108,39 @@ def _encode_lx16a(channel: int, angle: float, *, move_time_ms: int = 0) -> bytes
 # (header excluded). STS-series registers are little-endian (low byte first).
 # Position resolution: 4096 counts per 360° (mid position 2048 = 180°).
 
+_STS_INSTR_PING = 0x01
 _STS_INSTR_READ = 0x02
 _STS_INSTR_WRITE = 0x03
-_STS_REG_ID = 0x05  # 5, 1 byte (EEPROM)
-_STS_REG_LOCK = 0x37  # 55, 1 byte (EEPROM write-protect: 0=unlock, 1=lock)
-_STS_REG_TORQUE_ENABLE = 0x28  # 40, 1 byte
-_STS_REG_GOAL_POSITION = 0x2A  # 42, 2 bytes
-_STS_REG_PRESENT_POSITION = 0x38  # 56, 2 bytes
+
+
+class ServoRegister(IntEnum):
+    """STS/SMS control-table addresses.
+
+    Public on purpose: callers outside this module (bus scan, identification)
+    need to name the register they want without knowing its address, which keeps
+    raw addresses from leaking out of the serial layer (see the "Leaky Hardware
+    Protocol" anti-pattern in docs/technical_analysis_oo_design.md).
+
+    Every address is taken from the Feetech memory map and is **unverified
+    against a physical servo**, exactly like the rest of this protocol.
+    """
+
+    FIRMWARE = 0x00  # 0..1, major/minor
+    MODEL = 0x03  # 3..4, 2 bytes
+    ID = 0x05  # 5, 1 byte (EEPROM)
+    BAUD_CODE = 0x06  # 6, 1 byte (EEPROM; index into the baud table)
+    MIN_ANGLE_LIMIT = 0x09  # 9..10, 2 bytes (EEPROM)
+    MAX_ANGLE_LIMIT = 0x0B  # 11..12, 2 bytes (EEPROM)
+    TORQUE_ENABLE = 0x28  # 40, 1 byte
+    GOAL_POSITION = 0x2A  # 42, 2 bytes
+    LOCK = 0x37  # 55, 1 byte (EEPROM write-protect: 0=unlock, 1=lock)
+    PRESENT_POSITION = 0x38  # 56, 2 bytes
+    PRESENT_VOLTAGE = 0x3E  # 62, 1 byte, units of 0.1 V
+    PRESENT_TEMPERATURE = 0x3F  # 63, 1 byte, degrees C
+
+
 _STS_COUNTS_PER_REV = 4096
+_STS_STATUS_LEN = 6  # FF FF ID LEN ERR CHK -- a bare acknowledgement
 _STS_POSITION_REPLY_LEN = 8  # FF FF ID LEN ERR POS_LO POS_HI CHK
 _STS_MAX_ID = 253  # 254 is the broadcast ID; 0..253 are assignable
 
@@ -125,23 +151,84 @@ def _sts_packet(servo_id: int, instruction: int, params: list[int]) -> bytes:
     return bytes([0xFF, 0xFF, *body, checksum])
 
 
+def _sts_read_reply_length(value_length: int) -> int:
+    """Total status-packet size for a read of ``value_length`` bytes."""
+    return _STS_STATUS_LEN + value_length
+
+
+def _encode_sts3215_ping(servo_id: int) -> bytes:
+    """PING (instruction 0x01) -- no params; the servo answers a bare status packet."""
+    return _sts_packet(servo_id, _STS_INSTR_PING, [])
+
+
+def _encode_sts3215_read(servo_id: int, address: int, length: int) -> bytes:
+    """READ ``length`` bytes starting at ``address``."""
+    return _sts_packet(servo_id, _STS_INSTR_READ, [int(address), length])
+
+
+def _encode_sts3215_write(servo_id: int, address: int, length: int, value: int) -> bytes:
+    """WRITE ``value`` as ``length`` little-endian bytes starting at ``address``."""
+    payload = [(value >> (8 * i)) & 0xFF for i in range(length)]
+    return _sts_packet(servo_id, _STS_INSTR_WRITE, [int(address), *payload])
+
+
+def _check_sts3215_reply(data: bytes, servo_id: int, expected_len: int, what: str) -> int:
+    """Validate a status packet of ``expected_len`` bytes; return its error byte.
+
+    Raises ``RuntimeError`` on a missing/short/corrupt reply -- during bring-up a
+    loud, hex-dumped failure beats a silent wrong value.
+    """
+    if len(data) < expected_len:
+        raise RuntimeError(
+            f"servo {servo_id}: no/short {what} reply ({len(data)} bytes: "
+            f"{data.hex(' ') or '<empty>'}); check power, wiring, ID and baud"
+        )
+    if data[0:2] != b"\xff\xff":
+        raise RuntimeError(f"servo {servo_id}: bad reply header {data[:2].hex(' ')}")
+    if data[2] != servo_id:
+        raise RuntimeError(f"servo {servo_id}: reply came from ID {data[2]}")
+    if (~sum(data[2 : expected_len - 1])) & 0xFF != data[expected_len - 1]:
+        raise RuntimeError(f"servo {servo_id}: reply checksum mismatch ({data.hex(' ')})")
+    return data[4]
+
+
+def _parse_sts3215_status(data: bytes, servo_id: int) -> int:
+    """Decode a bare acknowledgement (e.g. a PING reply) into its error flags."""
+    return _check_sts3215_reply(data, servo_id, _STS_STATUS_LEN, "status")
+
+
+def _parse_sts3215_read_reply(
+    data: bytes, servo_id: int, length: int, what: str = "register"
+) -> int:
+    """Decode a register read reply into its little-endian integer value.
+
+    ``what`` only names the register in failure messages -- callers that read a
+    specific register (e.g. Present_Position) pass their own word so bring-up
+    diagnostics stay readable.
+    """
+    flags = _check_sts3215_reply(data, servo_id, _sts_read_reply_length(length), what)
+    if flags:
+        # Error flags (voltage/overheat/overload...) -- the value is still valid.
+        logger.warning("servo %d reports error flags 0x%02x", servo_id, flags)
+    return int.from_bytes(data[5 : 5 + length], "little")
+
+
 def _encode_sts3215(channel: int, angle: float) -> bytes:
     """WRITE Goal_Position. The servo bus ID is the config channel (0..5)."""
     pos = max(0, min(_STS_COUNTS_PER_REV - 1, round(angle * _STS_COUNTS_PER_REV / 360.0)))
-    params = [_STS_REG_GOAL_POSITION, pos & 0xFF, (pos >> 8) & 0xFF]
-    return _sts_packet(channel, _STS_INSTR_WRITE, params)
+    return _encode_sts3215_write(channel, ServoRegister.GOAL_POSITION, 2, pos)
 
 
 def _encode_sts3215_torque(channel: int, enabled: bool) -> bytes:
     """WRITE Torque_Enable — 0 makes the servo limp (hand-guidable)."""
-    return _sts_packet(
-        channel, _STS_INSTR_WRITE, [_STS_REG_TORQUE_ENABLE, 1 if enabled else 0]
+    return _encode_sts3215_write(
+        channel, ServoRegister.TORQUE_ENABLE, 1, 1 if enabled else 0
     )
 
 
 def _encode_sts3215_read_position(channel: int) -> bytes:
     """READ 2 bytes at Present_Position."""
-    return _sts_packet(channel, _STS_INSTR_READ, [_STS_REG_PRESENT_POSITION, 2])
+    return _encode_sts3215_read(channel, ServoRegister.PRESENT_POSITION, 2)
 
 
 def _encode_sts3215_lock(channel: int, locked: bool) -> bytes:
@@ -150,7 +237,7 @@ def _encode_sts3215_lock(channel: int, locked: bool) -> bytes:
     Servos ship locked. Reassigning an ID means unlock -> write ID -> lock; see
     ``_encode_sts3215_set_id`` for why the *lock* packet must address the new ID.
     """
-    return _sts_packet(channel, _STS_INSTR_WRITE, [_STS_REG_LOCK, 1 if locked else 0])
+    return _encode_sts3215_write(channel, ServoRegister.LOCK, 1, 1 if locked else 0)
 
 
 def _encode_sts3215_set_id(channel: int, new_id: int) -> bytes:
@@ -163,7 +250,7 @@ def _encode_sts3215_set_id(channel: int, new_id: int) -> bytes:
     """
     if not 0 <= new_id <= _STS_MAX_ID:
         raise ValueError(f"servo id {new_id} out of range 0..{_STS_MAX_ID}")
-    return _sts_packet(channel, _STS_INSTR_WRITE, [_STS_REG_ID, new_id & 0xFF])
+    return _encode_sts3215_write(channel, ServoRegister.ID, 1, new_id & 0xFF)
 
 
 def _parse_sts3215_position_reply(data: bytes, channel: int) -> float:
@@ -172,22 +259,40 @@ def _parse_sts3215_position_reply(data: bytes, channel: int) -> float:
     Raises ``RuntimeError`` on a missing/short/corrupt reply — during bring-up a
     loud, hex-dumped failure beats a silent wrong angle.
     """
-    if len(data) < _STS_POSITION_REPLY_LEN:
-        raise RuntimeError(
-            f"servo {channel}: no/short position reply ({len(data)} bytes: "
-            f"{data.hex(' ') or '<empty>'}); check power, wiring, ID and baud"
-        )
-    if data[0:2] != b"\xff\xff":
-        raise RuntimeError(f"servo {channel}: bad reply header {data[:2].hex(' ')}")
-    if data[2] != channel:
-        raise RuntimeError(f"servo {channel}: reply came from ID {data[2]}")
-    if (~sum(data[2:7])) & 0xFF != data[7]:
-        raise RuntimeError(f"servo {channel}: reply checksum mismatch ({data.hex(' ')})")
-    if data[4] != 0:
-        # Error flags (voltage/overheat/overload...) — position is still valid.
-        logger.warning("servo %d reports error flags 0x%02x", channel, data[4])
-    pos = data[5] | (data[6] << 8)
+    pos = _parse_sts3215_read_reply(data, channel, 2, "position")
     return pos * 360.0 / _STS_COUNTS_PER_REV
+
+
+@dataclass(frozen=True)
+class RegisterAccess:
+    """Address-level access to a bus servo's control table.
+
+    Bring-up needs to ask a servo what it *is* (model, firmware) and how it is
+    (voltage, temperature), which is far more of the memory map than the five
+    fixed operations ``FeedbackProtocol`` covers. Rather than add a closure per
+    register, this exposes the two operations the wire actually has -- read N
+    bytes at an address, write N bytes to an address -- plus PING, which is a
+    distinct instruction rather than a register access.
+    """
+
+    encode_ping: Callable[[int], bytes]
+    encode_read: Callable[[int, int, int], bytes]
+    encode_write: Callable[[int, int, int, int], bytes]
+    parse_read_reply: Callable[[bytes, int, int], int]
+    parse_status: Callable[[bytes, int], int]
+    status_length: int
+    read_reply_length: Callable[[int], int]
+
+
+_STS3215_REGISTERS = RegisterAccess(
+    encode_ping=_encode_sts3215_ping,
+    encode_read=_encode_sts3215_read,
+    encode_write=_encode_sts3215_write,
+    parse_read_reply=_parse_sts3215_read_reply,
+    parse_status=_parse_sts3215_status,
+    status_length=_STS_STATUS_LEN,
+    read_reply_length=_sts_read_reply_length,
+)
 
 
 @dataclass(frozen=True)
@@ -204,6 +309,9 @@ class FeedbackProtocol:
     reply_length: int
     encode_set_id: Optional[Callable[[int, int], bytes]] = None
     encode_lock: Optional[Callable[[int, bool], bytes]] = None
+    #: Address-level access, for bring-up scan/identification. Optional because
+    #: only dialects with a documented memory map can offer it.
+    registers: Optional[RegisterAccess] = None
 
 
 # -- protocol registry -------------------------------------------------------
@@ -225,6 +333,7 @@ _FEEDBACK: dict[str, FeedbackProtocol] = {
         reply_length=_STS_POSITION_REPLY_LEN,
         encode_set_id=_encode_sts3215_set_id,
         encode_lock=_encode_sts3215_lock,
+        registers=_STS3215_REGISTERS,
     ),
 }
 
