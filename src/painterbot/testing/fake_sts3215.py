@@ -232,7 +232,9 @@ class FakeSTS3215Serial:
         self.closed = False
         self.input_resets = 0
         self._incoming = bytearray()
-        self._faults: dict[int, Deque[QueuedFault]] = defaultdict(deque)
+        self._faults: dict[tuple[int, int | None], Deque[QueuedFault]] = defaultdict(
+            deque
+        )
 
     # -- test-facing state ---------------------------------------------------
 
@@ -258,8 +260,17 @@ class FakeSTS3215Serial:
         kind: FaultKind,
         *,
         reply_id: int | None = None,
+        instruction: int | None = None,
     ) -> None:
-        self._faults[servo_id].append(QueuedFault(kind=kind, reply_id=reply_id))
+        """Queue one fault for ``servo_id``'s next reply.
+
+        ``instruction`` narrows it to replies to that instruction (0x01 ping,
+        0x02 read, 0x03 write), so a test can say "answers the ping, then goes
+        quiet on the register reads" -- a real marginal-voltage symptom.
+        """
+        self._faults[(servo_id, instruction)].append(
+            QueuedFault(kind=kind, reply_id=reply_id)
+        )
 
     def queue_stale_packet(self, packet: bytes) -> None:
         self._incoming.extend(packet)
@@ -278,7 +289,9 @@ class FakeSTS3215Serial:
         reply = self._ideal_reply(servo, request)
         if reply is None:
             return
-        self._incoming.extend(self._apply_faults(request.servo_id, reply))
+        self._incoming.extend(
+            self._apply_faults(request.servo_id, request.instruction, reply)
+        )
 
     def read(self, n: int) -> bytes:
         out = bytes(self._incoming[:n])
@@ -311,8 +324,12 @@ class FakeSTS3215Serial:
             return None
         return None
 
-    def _apply_faults(self, servo_id: int, packet: bytes) -> bytes:
-        fault = self._faults[servo_id].popleft() if self._faults[servo_id] else None
+    def _apply_faults(self, servo_id: int, instruction: int, packet: bytes) -> bytes:
+        fault = None
+        for key in ((servo_id, instruction), (servo_id, None)):
+            if self._faults[key]:
+                fault = self._faults[key].popleft()
+                break
         if fault is None:
             return packet
         if fault.kind == "no_reply":
