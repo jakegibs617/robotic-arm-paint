@@ -426,7 +426,8 @@
     "Extended control/serial_controller.py (ServoRegister enum, RegisterAccess, ServoProbe/RegisterBus, exchange/ping/read_register/write_register, ServoEchoError) and testing/fake_sts3215.py (request parsing, bus presence semantics, SimulatedServo control table, ping, instruction-scoped faults, FakeGarbledSerial, FakeEchoingSerial).",
     "Added tests/test_bus_scan.py, test_motion_probe.py, test_register_bus.py, test_serial_link.py; extended test_control.py, test_fake_sts3215.py, test_bringup_cli.py, test_hardware_checklist.py. 214 passed, up from 139.",
     "Verified against real hardware 2026-09-26: `bringup ports` identified the CH343 adapter; `scan --ids 0-40` found exactly one servo at factory ID 1 / 1 Mbps; `identify --id 1` read model 777, firmware 3.10, angle limits 0..4095, 4.3V, 26C, stable across repeated reads. This is the first time the sts3215 read path has touched a physical servo.",
-    "Motion probe remains unverified on hardware: the bench servo reads 4.3V (USB power only), below the 6-8.4V spec, so nothing was commanded to move."
+    "Motion probe remains unverified on hardware: the bench servo reads 4.3V (USB power only), below the 6-8.4V spec, so nothing was commanded to move.",
+    "Reviewed by a subagent on PR #6, which caught a serious echo-guard false positive: a PING reply carrying error flag 0x01 is byte-identical to the PING request, and bit 0 of the STS error byte is under-voltage -- exactly what the 4.3V bench servo reports. Echo is now decided once per link using a 4-byte read whose 10-byte reply an 8-byte echo cannot fill. Also fixed from the review: AttributeError under the shipped default config, nudge exiting 0 with torque possibly enabled, nudge_servo raising despite documenting that it does not, and nudge leaving a live goal behind. Merged at 97b8831; 239 passed."
    ]
   }
  ],

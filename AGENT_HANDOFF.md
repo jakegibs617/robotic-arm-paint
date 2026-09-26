@@ -10,12 +10,14 @@ The **entire software stack runs end-to-end today in mock mode** (no hardware).
 You can plan a square/star/SVG, map it to servo poses, and "execute" it against an
 in-memory mock serial backend that logs every command.
 
-**Hardware is ordered (July 2026) and identified**: 6× Feetech **STS3215** serial
-bus servos (7.4V, 19 kg·cm, 360° magnetic encoder with position feedback) plus an
-**FE-URT-2** USB→TTL bus adapter — the Mac drives the servo bus directly; there is
-no controller board. The `sts3215` wire protocol (write position, read position,
-torque on/off) is implemented and unit-tested against known byte frames, but
-**unverified on real hardware** until the parts arrive. What's missing is Phase 1
+**Hardware has arrived and one servo is on the bench**: Feetech **STS3215**
+serial bus servos (7.4V, 1:345, 19 kg·cm, 360° magnetic encoder with position
+feedback) plus an **FE-URT-2** USB→TTL bus adapter — the Mac drives the servo bus
+directly; there is no controller board. As of SW-017 the `sts3215` **read** path
+is **verified against a physical servo** (ping, register reads, framing,
+checksums, little-endian decode, 1 Mbps on macOS CDC-ACM). The **write** path —
+torque, goal position, the counts-to-motion mapping — is **still unverified**,
+blocked on getting 7.4V onto the adapter's screw terminal. What's missing is Phase 1
 bring-up (IDs, power, safe ranges), real calibration poses, the arm frame, and the
 marker holder. The MVP milestone — *robot draws a square on paper* — is blocked on
 hardware arrival, not on more software.
@@ -27,9 +29,105 @@ and Setup gotcha below). Homography (`tests/test_calibration.py`), preview
 (`tests/test_preview.py`), the iphone stubs (`tests/test_iphone.py`), the
 `--dry-run` summary (`tests/test_dry_run.py`), the sts3215 framing/feedback path
 (`tests/test_control.py`), and servo-ID (re)assignment (`tests/test_id_assignment.py`)
-all have coverage — 139 tests pass as of this writing (`.venv/bin/python -m pytest -q`).
+all have coverage, as do bus scan/identification (`tests/test_bus_scan.py`),
+the bounded motion probe (`tests/test_motion_probe.py`), register-level probing
+(`tests/test_register_bus.py`) and port discovery (`tests/test_serial_link.py`)
+— 239 tests pass as of this writing (`.venv/bin/python -m pytest -q`).
 
-## Latest completed milestone: SW-016 — servo-ID assignment + bringup wiring
+## Latest completed milestone: SW-017 — bus scan, identification, motion probe
+
+- **PR**: [#6](https://github.com/jakegibs617/robotic-arm-paint/pull/6) (merged
+  into `main` at `97b8831`).
+- **What it did**: gave the repo a way to ask the bus *what is on it* rather
+  than only checking whether the six IDs the config expects reply. Added
+  register-level access to the `sts3215` protocol (`RegisterAccess`,
+  `ServoRegister`), two narrow role interfaces (`ServoProbe` is read-only, so
+  "a scan cannot move a servo" is a property of the types), `control/bus_scan.py`
+  (identify / scan / baud sweep / ID-spec parsing), `control/motion_probe.py`
+  (a hard-capped nudge in raw encoder counts), `control/serial_link.py` (port
+  discovery), and four `bringup` subcommands: `ports`, `scan`, `identify`,
+  `nudge`.
+- **🔌 FIRST HARDWARE SESSION — the `sts3215` read path is now verified against
+  a physical servo.** See the measured table in
+  [docs/hardware_identification.md](docs/hardware_identification.md#what-one-physical-servo-reported-2026-09-26).
+  Headlines: adapter is a **WCH CH343/CH9102** (`1a86:55d3`) at
+  `/dev/cu.usbmodem5B790320481`, macOS built-in CDC-ACM, no driver — the docs'
+  `CH34x` / `/dev/tty.usbserial-*` expectation was wrong on both counts.
+  Servo answers at **factory ID 1 / 1,000,000 baud**, **model 777**, firmware
+  **3.10**, angle limits **0..4095**, no adapter echo. 1 Mbps applies correctly
+  on macOS CDC-ACM.
+- **Three hardware facts that changed the design**, all recorded in
+  `docs/hardware_bringup_checklist.json`:
+  1. **This FE-URT-2 passes USB 5V to the servo bus.** The servo runs and
+     answers reads fully at 4.3V, so a silent bus is *not* the symptom of a
+     missing supply, and "it answered" does *not* mean the supply is adequate.
+     Read the voltage.
+  2. **A goal write is not inert — it implicitly enables torque.** Writing a
+     `Goal_Position` that *differs* from the present position energises the
+     servo (0 → 1); writing one *equal* to it does not. Nothing can pre-stage a
+     goal without committing to motion. `Servo.move_to` / `Arm.move_to_pose`
+     therefore leave the servo energised regardless of `set_torque` — documented,
+     **not yet fixed**.
+  3. **The servo sits with a stale `Goal_Position` of 0** while parked at 4094
+     counts. Enabling torque in that state is a near-full-turn slam. `nudge_servo`
+     clears it by writing `goal = present` (the one goal write that cannot
+     energise or move) before enabling torque.
+  Also: the servo's own voltage protection window is **4.0–8.0 V** — note 8.0,
+  not 8.4, so **a freshly charged 2S LiPo exceeds the servo's own limit**. Use a
+  bench supply at 7.4 V.
+- **Two latent bugs fixed**: the silent-mock trap (`--port` with `protocol: mock`
+  quietly used the mock backend and reported six healthy servos), and adapter
+  echo — an echoed 2-byte position read is a well-formed frame that decodes to
+  568 counts = 49.9°, which `read_servo` would have handed to `Arm` as a real
+  joint angle.
+- **Tests run**: `.venv/bin/python -m pytest -q` — **239 passed** (up from 139).
+  New: `test_bus_scan.py`, `test_motion_probe.py`, `test_register_bus.py`,
+  `test_serial_link.py`.
+- **Review**: a subagent reviewed PR #6 and posted findings on GitHub
+  ([review](https://github.com/jakegibs617/robotic-arm-paint/pull/6#issuecomment-5848274028),
+  [response](https://github.com/jakegibs617/robotic-arm-paint/pull/6#issuecomment-5848356843)).
+  It caught a **serious false positive in the echo guard**: request and status
+  frames share a shape, so a PING reply carrying error flag `0x01` is
+  byte-identical to the PING request — and bit 0 of the STS error byte is
+  **under-voltage**, exactly what this bench servo reports. The guard would have
+  blamed the adapter for the one thing that was working, and aborted the whole
+  scan. Echo is now decided once per link, by a 4-byte read whose 10-byte reply
+  an 8-byte echo provably cannot fill. Also fixed: a raw `AttributeError` under
+  the shipped default config, `nudge` exiting 0 with torque possibly enabled,
+  `nudge_servo` raising despite documenting that it does not, and `nudge`
+  leaving a live goal behind (the same hazard it was written to prevent).
+- **Known limitations**: **the write path is entirely unverified.** The bench
+  servo reads 4.3 V against a 6–8.4 V spec, so torque, goal position, and the
+  sign/scale of the counts-to-motion mapping have never been exercised.
+  `HW-MOTION-001` is `blocked` on 7.4 V. Deferred from the review, all agreed
+  as real: collapse `FeedbackProtocol` into `RegisterAccess` (they describe one
+  protocol twice); replace `preflight`'s substring-matching error classifier
+  with typed exceptions and give it an `echo` status; propagate the
+  implicit-torque finding into `Servo`/`Arm`; extract `_simulated_bus` into a
+  factory.
+- **Copy/paste prompt for the next session**:
+
+  ```text
+  Read AGENT_HANDOFF.md first. The sts3215 READ path is verified on hardware;
+  the WRITE path is not, and is blocked on 7.4V (>=5A, bench supply -- NOT a
+  freshly charged 2S LiPo, which at 8.4V exceeds the servo's own 8.0V limit)
+  into the FE-URT-2's blue screw terminal.
+
+  If 7.4V IS connected: `bringup ports`, then `bringup --port <dev> --protocol
+  sts3215 identify --id 1` and CHECK IT REPORTS ~7.4V NOT 4.3V. Then
+  `nudge --id 1 --counts 0` (torque + read-back, no motion), then
+  `--counts 57` and `--counts -57` with the horn unloaded. Record the achieved
+  delta and its SIGN into docs/hardware_bringup_checklist.json HW-MOTION-001 --
+  nothing in the repo knows the counts-to-motion mapping yet. Only then
+  `assign-id`, one servo at a time, confirming each with `scan`.
+
+  If 7.4V is NOT connected: do not command motion. Pick up the deferred
+  software work listed under SW-017's known limitations instead -- the
+  FeedbackProtocol/RegisterAccess merge and preflight's typed exceptions are
+  both well understood and hardware-independent.
+  ```
+
+## Previous milestone: SW-016 — servo-ID assignment + bringup wiring
 
 - **PR**: [#5](https://github.com/jakegibs617/robotic-arm-paint/pull/5) (merged
   into `main` at `650cd5d`).
