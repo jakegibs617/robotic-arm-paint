@@ -119,7 +119,7 @@ def test_fake_serves_identity_and_telemetry_registers():
             1: SimulatedServo(
                 position_counts=2043,
                 model_number=777,
-                firmware=(3, 6),
+                firmware=(3, 10),
                 voltage_dv=74,
                 temperature_c=32,
             )

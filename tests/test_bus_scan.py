@@ -39,7 +39,7 @@ def _bench_servo() -> SimulatedServo:
     return SimulatedServo(
         position_counts=2043,
         model_number=777,
-        firmware=(3, 6),
+        firmware=(3, 10),
         voltage_dv=74,
         temperature_c=32,
         min_angle_counts=0,
@@ -56,7 +56,7 @@ def test_identify_reports_what_the_servo_says_about_itself():
     assert identity is not None
     assert identity.servo_id == 1
     assert identity.model_number == 777
-    assert identity.firmware == (3, 6)
+    assert identity.firmware == (3, 10)
     assert identity.position_counts == 2043
     assert identity.voltage_v == pytest.approx(7.4)
     assert identity.temperature_c == 32

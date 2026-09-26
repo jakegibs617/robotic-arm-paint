@@ -58,3 +58,41 @@ def test_hardware_checklist_tracks_ids_ranges_and_calibration_poses():
         "corner_tl",
         "corner_tr",
     ]
+
+
+def test_hardware_checklist_pins_the_measured_usb_adapter_facts():
+    # These were guesses (CH34x, /dev/tty.usbserial-*) and were wrong. Pin the
+    # measured values so a doc regression fails a test instead of costing
+    # another bring-up session.
+    data = json.loads(
+        (REPO_ROOT / "docs" / "hardware_bringup_checklist.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    serial_item = {item["id"]: item for item in data["items"]}["HW-SERIAL-001"]
+
+    assert serial_item["expected"]["usb_vid"] == 0x1A86
+    assert serial_item["expected"]["usb_pid"] == 0x55D3
+    assert "CH343" in serial_item["expected"]["usb_chip_family"]
+    assert "/dev/cu.usbmodem*" in serial_item["expected"]["device_globs"]
+    assert serial_item["expected"]["use_callout_node"] is True
+    # No /dev/tty.* glob should ever come back: that node blocks on open.
+    assert not any(
+        glob.startswith("/dev/tty") for glob in serial_item["expected"]["device_globs"]
+    )
+
+
+def test_hardware_checklist_tracks_the_scan_and_motion_probes():
+    data = json.loads(
+        (REPO_ROOT / "docs" / "hardware_bringup_checklist.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    by_id = {item["id"]: item for item in data["items"]}
+
+    assert by_id["HW-SCAN-001"]["expected"]["model_number"] == 777
+    assert by_id["HW-SCAN-001"]["record"]["answered_ids"] == [1]
+    # The motion probe stays blocked while the bench servo is under-voltage.
+    assert by_id["HW-MOTION-001"]["status"] == "blocked"
+    assert by_id["HW-MOTION-001"]["expected"]["max_delta_counts"] == 200
+    assert by_id["HW-MOTION-001"]["expected"]["start_with_zero_delta"] is True

@@ -19,12 +19,16 @@
 serial:
   # STS3215 factory default is 1 Mbps (only used for real connections).
   baud: 1000000
-  # Default port is null; pass --port on the CLI or set it here once known,
-  # e.g. /dev/tty.usbserial-1420 (FE-URT-2 adapter; see docs/hardware_identification.md)
+  # Default port is null; pass --port on the CLI or set it here once known.
+  # Measured on this build: /dev/cu.usbmodem5B790320481 (FE-URT-2 with a WCH
+  # CH343, 1a86:55d3). Run `bringup ports` to find it. Use the /dev/cu.* node,
+  # never /dev/tty.* -- see docs/hardware_identification.md
   port: null
   timeout_s: 1.0
-  # Protocol the servos speak. "mock" runs fully in software; switch to
-  # "sts3215" (Feetech STS bus servos, the ordered hardware) for bring-up.
+  # Protocol the servos speak. "mock" runs fully in software. Left as "mock" on
+  # purpose so no app goes looking for hardware by default: pass
+  # `--protocol sts3215 --port ...` for a real session. Giving a --port while
+  # this says "mock" is a hard error, not a silent no-op.
   # Servo bus IDs must be assigned to match the channel numbers below (0..5).
   # Other encoders: "ascii_servo" (Arduino PWM fallback), "lx16a".
   protocol: mock

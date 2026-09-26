@@ -20,15 +20,25 @@ Two sibling fakes model failures that are about the *link* rather than a servo:
   matters more than it looks: an echoed request can satisfy every validation
   check and decode as a plausible position (see ``PySerialBackend.exchange``).
 
-Still unknown until the servos are powered:
+Confirmed against a physical STS3215 on 2026-09-26 (bus powered from USB only,
+4.3 V, so reads only -- see docs/hardware_identification.md):
+* PING, register reads, framing, checksums and little-endian decoding all work.
+* Model number is 777 (MODEL_L=9, MODEL_H=3), firmware 3.10, factory ID 1 at
+  1,000,000 baud, angle limits 0..4095 counts. The defaults below match.
+* No adapter echo on this FE-URT-2.
+
+Still unknown:
 * Whether a real STS3215 acks writes at all (Response Status Level, register
   0x08). ``ack_writes`` defaults to ``False`` -- the conservative assumption the
   rest of the suite was written under. Flip it once a bench servo proves acks
   arrive, do not assume it.
-* The real model number an STS3215 reports (``SimulatedServo.model_number`` is a
-  placeholder), and the meaning of register 0x02.
+* Everything about the write path: torque enable, goal position, and the sign
+  and scale of the counts-to-motion mapping. The bench servo was under-voltage
+  (4.3 V against a 6-8.4 V spec), so nothing has been commanded to move.
+* The meaning of register 0x02.
 * Exact timing around servo status packets and write acknowledgements.
-* Real error-flag combinations under low voltage, overload, or overheating.
+* Real error-flag combinations under low voltage, overload, or overheating --
+  notably, 4.3 V produced error flags 0x00, not an under-voltage flag.
 * Whether the EEPROM unlock/write-ID/re-lock sequence in
   ``PySerialBackend.assign_servo_id`` behaves as the memory map implies -- this
   fake does not simulate EEPROM persistence or ID remapping.
@@ -74,12 +84,14 @@ class SimulatedServo:
     """One servo's worth of control table, in the units the registers use.
 
     Defaults describe a healthy 7.4 V STS3215 sitting at its centre count.
-    ``model_number`` is a **placeholder**: no physical servo has been read yet.
+    ``model_number`` and ``firmware`` are the values a physical STS3215 actually
+    reported (see the module docstring); ``voltage_dv`` is the nominal powered
+    value rather than an observed one.
     """
 
     position_counts: int = 2048
-    model_number: int = 777
-    firmware: tuple[int, int] = (3, 6)
+    model_number: int = 777  # MODEL_L=9, MODEL_H=3 -- confirmed on hardware
+    firmware: tuple[int, int] = (3, 10)  # confirmed on hardware
     voltage_dv: int = 74  # register units: 0.1 V
     temperature_c: int = 32
     error_flags: int = 0

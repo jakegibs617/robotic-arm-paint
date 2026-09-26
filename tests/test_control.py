@@ -459,3 +459,16 @@ def test_servo_register_addresses_match_feetech_memory_map():
     assert ServoRegister.PRESENT_POSITION == 0x38
     assert ServoRegister.PRESENT_VOLTAGE == 0x3E
     assert ServoRegister.PRESENT_TEMPERATURE == 0x3F
+
+
+def test_open_backend_refuses_a_real_port_when_the_protocol_is_mock():
+    # The trap this closes: configs/arm.default.yaml still ships protocol: mock,
+    # so `bringup ping --port /dev/cu.X` used to talk to the mock backend and
+    # report healthy servos without sending a single byte.
+    with pytest.raises(ValueError, match="protocol is 'mock'"):
+        open_backend(port="/dev/cu.usbmodem1", protocol="mock")
+
+
+def test_open_backend_still_mocks_when_no_port_is_given():
+    assert open_backend(protocol="mock").is_mock
+    assert open_backend(mock=True, port="/dev/cu.usbmodem1").is_mock

@@ -682,12 +682,23 @@ def open_backend(
     protocol is ``"mock"``. A real connection resolves ``protocol`` to a wire
     encoder (raising on an unknown name) and requires an explicit ``port``.
     """
+    if not mock and protocol == "mock" and port:
+        # The trap: configs/arm.default.yaml ships protocol: mock, so a real
+        # --port used to be silently ignored and the mock backend would report
+        # healthy servos without a byte leaving the machine.
+        raise ValueError(
+            f"port {port} was given but the serial protocol is 'mock', so no "
+            "bytes would be sent. Pass --protocol sts3215 (or set "
+            "serial.protocol in configs/arm.default.yaml), or use --mock "
+            "without --port."
+        )
     if mock or protocol == "mock":
         return MockSerialBackend()
     encoder = get_encoder(protocol)  # validates the protocol name up front
     if not port:
         raise ValueError(
-            "no serial port given; pass --port /dev/tty.usbserial-XXXX or use --mock"
+            "no serial port given; pass --port /dev/cu.usbmodem* (run `bringup "
+            "ports` to find it) or use --mock"
         )
     return PySerialBackend(
         port=port,
