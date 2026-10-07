@@ -15,9 +15,12 @@ serial bus servos (7.4V, 1:345, 19 kg·cm, 360° magnetic encoder with position
 feedback) plus an **FE-URT-2** USB→TTL bus adapter — the Mac drives the servo bus
 directly; there is no controller board. As of SW-017 the `sts3215` **read** path
 is **verified against a physical servo** (ping, register reads, framing,
-checksums, little-endian decode, 1 Mbps on macOS CDC-ACM). The **write** path —
-torque, goal position, the counts-to-motion mapping — is **still unverified**,
-blocked on getting 7.4V onto the adapter's screw terminal. What's missing is Phase 1
+checksums, little-endian decode, 1 Mbps on macOS CDC-ACM). As of the
+2026-10-07 bench session the **write** path is **verified at the protocol level**
+on 7.4V: torque enable, goal position + speed/acc, and return to start, but only
+with an out-of-repo Node script (see the next section). The repo's own
+`bringup nudge` and `Servo`/`Arm` write path have **still never driven a servo**.
+What's missing is Phase 1
 bring-up (IDs, power, safe ranges), real calibration poses, the arm frame, and the
 marker holder. The MVP milestone — *robot draws a square on paper* — is blocked on
 hardware arrival, not on more software.
@@ -34,7 +37,49 @@ the bounded motion probe (`tests/test_motion_probe.py`), register-level probing
 (`tests/test_register_bus.py`) and port discovery (`tests/test_serial_link.py`)
 — 239 tests pass as of this writing (`.venv/bin/python -m pytest -q`).
 
-## Latest completed milestone: SW-017 — bus scan, identification, motion probe
+## Latest hardware session: 2026-10-07 — first powered move (one servo)
+
+- **Setup**: Windows machine. FE-URT-2 enumerates as **COM4** (WCH CH343,
+  `1a86:55d3`, serial `5B79032048`, the same adapter as the Mac's
+  `/dev/cu.usbmodem5B790320481`). Bench supply at **7.4 V, ~2 A limit** into the
+  screw terminal, USB kept connected for data. (COM3 on this machine is an
+  unrelated pen plotter; do not send servo packets there.)
+- **Tools**: `~/.claude/tools/feetech/sts-scan.js` (read-only) and
+  `sts-move-test.js` (Node + `serialport`). Both are **outside this repo**, so
+  nothing here is evidence for the Python code path.
+- **Read-only scan**: ID 1 at 1,000,000 baud, model 777, position 4093,
+  **voltage 7.4 V** (the 4.3 V USB-only reading from SW-017 is gone), 24 °C,
+  status 0 / error 0.
+- **Move test** (10°, speed 300 steps/s, acc 10): pre-checks passed (mode 0,
+  limits 0..4095, 7.4 V, torque was 0).
+  | Leg | Goal | Reached | Time |
+  |---|---|---|---|
+  | Out | 3979 | 3980 | 662 ms |
+  | Back | 4093 | 4092 | 666 ms |
+  Both legs landed within 1 count. Temperature after: 26 °C. Current 0 mA and
+  load 0% were read after the servo settled, horn unloaded, so they tell us
+  nothing about load yet. **Torque was restored to off.** The user watched the
+  horn move and confirmed the motion.
+- **Still unknown**: the **physical direction** (CW/CCW seen from the horn) for
+  decreasing counts was not recorded. That sign is what HW-MOTION-001 needs.
+  `docs/hardware_bringup_checklist.json` was **not** updated: run the repo's
+  `nudge` path and record from that.
+- **Rest position 4093 is 2 counts from the 4095→0 rollover**; move toward lower
+  counts. Re-centering near 2048 before mounting anything would remove the
+  hazard.
+- **Copy/paste prompt for the next session**:
+
+  ```text
+  Read AGENT_HANDOFF.md first. One STS3215 has moved on 7.4V via an
+  out-of-repo Node script; the repo's own write path has not. With the horn
+  unloaded and 7.4V confirmed by `bringup identify --id 1`, run
+  `bringup nudge --id 1 --counts 0`, then `--counts -57` and `--counts 57`
+  (negative first: it rests at ~4093, near the rollover). Record the
+  achieved delta AND the physical direction into HW-MOTION-001 in
+  docs/hardware_bringup_checklist.json. Then assign IDs one servo at a time.
+  ```
+
+## Previous milestone: SW-017 — bus scan, identification, motion probe
 
 - **PR**: [#6](https://github.com/jakegibs617/robotic-arm-paint/pull/6) (merged
   into `main` at `97b8831`).
